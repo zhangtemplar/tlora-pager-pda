@@ -17,6 +17,7 @@
 #include "freertos/event_groups.h"
 #include "LilyGoLib.h"
 #include "driver/rtc_io.h"
+#include <Preferences.h>
 
 extern void setGroupBitsFromISR(EventGroupHandle_t xEventGroup,
                                 const EventBits_t uxBitsToSet);
@@ -182,6 +183,19 @@ uint32_t LilyGoWatch2022::begin(uint32_t disable_hw_init)
         } else {
             log_e("❌Radio init failed, code :%d , Use %s", state, USING_RADIO_NAME);
         }
+    }
+
+
+    Preferences prefs;
+    prefs.begin("lilygo", false);
+    bool batteryCalibrated = prefs.getBool("calibration");
+    prefs.end();
+
+    if (!batteryCalibrated) {
+        // The presence of GPS is used to determine if it is a T-Watch-Plus;
+        // if so, the 940mAh battery parameter is written into the system.
+        _is_watch_plus = devices_probe & HW_GPS_ONLINE;
+        calibrationPMU(_is_watch_plus ? 940 : 470);
     }
 
     setRotation(0);
@@ -508,6 +522,30 @@ bool LilyGoWatch2022::initPMU()
     return true;
 }
 
+bool LilyGoWatch2022::calibrationPMU(uint16_t batteryCapacity)
+{
+#if XPOWERSLIB_VERSION >= XPOWERSLIB_VERSION_VAL(0,3,2)
+    uint8_t *batteryParams = NULL;
+    if (batteryCapacity == 940) {
+        batteryParams = BATTERY_PARAMS_940mAh;
+    } else if (batteryCapacity == 470) {
+        batteryParams = BATTERY_PARAMS_470mAh;
+    } else {
+        return false;
+    }
+    if (pmu.writeGaugeData(batteryParams, 128)) {
+        log_d("Battery calibration data write success");
+        Preferences prefs;
+        prefs.begin("lilygo", false);
+        prefs.putBool("calibration", true);
+        prefs.end();
+    } else {
+        log_e("Battery calibration data write failed");
+        return false;
+    }
+#endif
+    return true;
+}
 
 void LilyGoWatch2022::checkPowerStatus()
 {
