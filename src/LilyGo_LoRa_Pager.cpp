@@ -1053,9 +1053,7 @@ bool LilyGoLoRaPager::initNRF24()
 
 bool LilyGoLoRaPager::initLoRa()
 {
-    if (radio.reset() != RADIOLIB_ERR_NONE) {
-        log_e("Radio reset failed");
-    }
+    radio.reset();
 
     int state = radio.begin();
 
