@@ -21,7 +21,7 @@
 #define HW_GPS_ONLINE               (_BV(6))
 #define HW_SD_ONLINE                (_BV(7))
 #define HW_NFC_ONLINE               (_BV(8))
-#define HW_SENSOR_ONLINE            (_BV(9))
+#define HW_BHI260AP_ONLINE          (_BV(9))
 #define HW_KEYBOARD_ONLINE          (_BV(10))
 #define HW_GAUGE_ONLINE             (_BV(11))
 #define HW_EXPAND_ONLINE            (_BV(12))
@@ -31,6 +31,9 @@
 #define HW_BME280_ONLINE            (_BV(16))
 #define HW_QMC5883P_ONLINE          (_BV(17))
 #define HW_LED_INDIC_ONLINE         (_BV(18))
+#define HW_QMI8658_ONLINE           (_BV(19))
+#define HW_BMA423_ONLINE            (_BV(20))
+
 
 /* Selectively disable some initialisation */
 #define NO_HW_RTC                   (_BV(0))
@@ -51,7 +54,8 @@
 #define NO_HW_SI4735                (_BV(14))
 #define NO_HW_BME280                (_BV(15))
 #define NO_HW_QMC5883P              (_BV(16))
-#define NO_HW_CODEC                 (_BV(17))   
+#define NO_HW_CODEC                 (_BV(17))
+#define NO_HW_QMI8658               (_BV(18))
 
 /* Hardware interrupt mask */
 #define HW_IRQ_TOUCHPAD             (_BV(0))
@@ -84,7 +88,7 @@ typedef enum PowerCtrlChannel {
     POWER_KEYBOARD,
     // Extern gpio
     POWER_EXT_GPIO,
-    // SI4735 Radio 
+    // SI4735 Radio
     POWER_SI4735_RADIO,
     // Codec
     POWER_CODEC,
