@@ -30,9 +30,9 @@
 #define HW_SI473X_ONLINE            (_BV(15))
 #define HW_BME280_ONLINE            (_BV(16))
 #define HW_QMC5883P_ONLINE          (_BV(17))
-#define HW_LED_INDIC_ONLINE         (_BV(18))
+#define HW_BMA423_ONLINE            (_BV(18))
 #define HW_QMI8658_ONLINE           (_BV(19))
-#define HW_BMA423_ONLINE            (_BV(20))
+#define HW_LED_INDIC_ONLINE         (_BV(20))
 
 
 /* Selectively disable some initialisation */

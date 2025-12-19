@@ -99,7 +99,12 @@ static const char *hw_devices[] = {
 #else
     "",
 #endif
-    "Motion sensor",
+
+#ifdef USING_BHI260_SENSOR
+    "BHI260AP 6-Axis Sensor",
+#else
+    "",
+#endif
 #ifdef USING_INPUT_DEV_KEYBOARD
     "Keyboard",
 #else
@@ -120,6 +125,8 @@ static const char *hw_devices[] = {
 
 #ifdef USING_AUDIO_CODEC
     "Audio codec",
+#else
+    "",
 #endif
 
 #ifdef USING_EXTERN_NRF2401
@@ -130,14 +137,32 @@ static const char *hw_devices[] = {
 
 #ifdef USING_SI473X_RADIO
     "SI4735 Radio",
+#else
+    "",
 #endif
 
 #ifdef USING_BME280
     "BME280 Pressure & Temperature",
+#else
+    "",
 #endif
 
 #ifdef USING_MAG_QMC5883
     "QMC5883P Magnetometer",
+#else
+    "",
+#endif
+
+#ifdef USING_BMA423_SENSOR
+    "BMA423 Accelerometer",
+#else
+    "",
+#endif
+
+#ifdef USING_QMI8658_SENSOR
+    "QMI8658 6-Axis Sensor",
+#else
+    "",
 #endif
 
 };
@@ -1910,27 +1935,59 @@ void hw_print_mem_info()
 }
 
 
-#if defined(USING_IR_REMOTE) && defined(ARDUINO)
+#if defined(ARDUINO) && defined(USING_IR_REMOTE)
 #include <IRsend.h>
 IRsend irsend(IR_SEND); // T-Watch S3 GPIO2 pin to use.
-static bool isBegin = false;
+#endif
+
+
+#if defined(ARDUINO) && defined(USING_IR_RECEIVER)
+#include <IRremoteESP8266.h>
+#include <IRrecv.h>
+IRrecv irrecv(IR_SEND); // T-Watch S3 GPIO15 pin to use.
+#endif
+
 void hw_set_remote_code(uint32_t nec_code)
 {
+#if defined(ARDUINO) && defined(USING_IR_REMOTE)
+    static bool isBegin = false;
     if (!isBegin) {
         isBegin = true;
         irsend.begin();
     }
     irsend.sendNEC(nec_code);
-}
-#else
-void hw_set_remote_code(uint32_t nec_code)
-{
-    printf("Send code:0x%X\n", nec_code);
-}
 #endif
+}
+
+void hw_get_remote_code(uint64_t &result)
+{
+#if defined(ARDUINO) && defined(USING_IR_RECEIVER)
+    decode_results results;
+    if (irrecv.decode(&results)) {
+        Serial.print("IR Code received: ");
+        Serial.println(results.value, HEX);
+        result = results.value;
+        irrecv.resume();  // Receive the next value
+    }
+#else
+    result = random(0, INT_MAX);
+#endif
+}
+
+void hw_ir_function_select(bool enableSend)
+{
+#if defined(ARDUINO) && defined(USING_IR_REMOTE) && defined(USING_IR_RECEIVER)
+    if (enableSend) {
+        instance.IRFunctionSelect(IR_FUNC_SENDER);
+        irrecv.disableIRIn();
+    } else {
+        instance.IRFunctionSelect(IR_FUNC_RECEIVER);
+        irrecv.enableIRIn();
+    }
+#endif
+}
 
 #ifdef USING_MAG_QMC5883
-
 void hw_mag_enable(bool enable)
 {
 #ifdef ARDUINO
@@ -1944,9 +2001,8 @@ void hw_mag_enable(bool enable)
     } else {
         instance.mag.setMode(SensorQSTMagnetic::MODE_SUSPEND);
     }
-#endif
+#endif // ARDUINO
 }
-
 
 float hw_mag_get_polar()
 {
@@ -1963,7 +2019,7 @@ float hw_mag_get_polar()
 #endif
 }
 
-#endif /*USING_MAG_QMC5883*/
+#endif // USING_MAG_QMC5883
 
 #ifdef USING_BME280
 

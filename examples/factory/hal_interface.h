@@ -93,9 +93,9 @@ typedef enum {
 #define HW_SI473X_ONLINE            (_BV(15))
 #define HW_BME280_ONLINE            (_BV(16))
 #define HW_QMC5883P_ONLINE          (_BV(17))
-#define HW_LED_INDIC_ONLINE         (_BV(18))
+#define HW_BMA423_ONLINE            (_BV(18))
 #define HW_QMI8658_ONLINE           (_BV(19))
-#define HW_BMA423_ONLINE            (_BV(20))
+#define HW_LED_INDIC_ONLINE         (_BV(20))
 
 #else
 // If compiling for Arduino, include the WiFi library
@@ -1211,6 +1211,24 @@ uint16_t radio_get_tx_power_length();
 void hw_set_remote_code(uint32_t nec_code);
 #endif
 
+
+/**
+ * @brief Select the IR function (send/receive).
+ *
+ * This function selects whether to enable sending or receiving for the IR function.
+ *
+ * @param enableSend True to enable sending, false to enable receiving.
+ */
+void hw_ir_function_select(bool enableSend);
+
+/**
+ * @brief Get the remote control code.
+ *
+ * This function retrieves the remote control code received by the IR receiver.
+ *
+ * @param result A reference to a uint64_t variable where the received code will be stored.
+ */
+void hw_get_remote_code(uint64_t &result);
 
 enum Si4735Mode {
     FM,
