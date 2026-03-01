@@ -5,6 +5,7 @@
  * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
  * @date      2025-04-01
  * @brief     Dictionary app with offline (SD) and online lookup.
+ *            Supports multiple StarDict dictionaries with a selection dropdown.
  */
 #include "ui_define.h"
 #include "dict_lookup.h"
@@ -12,9 +13,13 @@
 
 static lv_obj_t *menu = NULL;
 static lv_obj_t *quit_btn = NULL;
+static lv_obj_t *dict_dropdown = NULL;
 static lv_obj_t *search_ta = NULL;
 static lv_obj_t *result_label = NULL;
 static lv_obj_t *status_label = NULL;
+
+// selected_dict: 0 = "All Dictionaries", 1..N = specific dict (index 0..N-1)
+static int selected_dict = 0;
 
 static void do_search()
 {
@@ -26,9 +31,16 @@ static void do_search()
     dict_result_t result;
     bool found = false;
 
-    // Try StarDict first (most common offline format)
-    if (dict_stardict_available()) {
-        found = dict_lookup_stardict(word, result);
+    int sd_count = dict_get_stardict_count();
+
+    if (sd_count > 0) {
+        if (selected_dict == 0) {
+            // Search all StarDict dictionaries
+            found = dict_lookup_stardict_all(word, result);
+        } else {
+            // Search specific dictionary (dropdown index 1 = dict index 0)
+            found = dict_lookup_stardict_single(selected_dict - 1, word, result);
+        }
     }
 
     // Try custom binary format
@@ -54,6 +66,15 @@ static void do_search()
     } else {
         lv_label_set_text(result_label, "Word not found.");
         lv_label_set_text(status_label, "Try connecting WiFi for online lookup.");
+    }
+}
+
+static void dropdown_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_obj_t *dd = (lv_obj_t *)lv_event_get_target(e);
+        selected_dict = lv_dropdown_get_selected(dd);
     }
 }
 
@@ -123,6 +144,33 @@ void ui_dictionary_enter(lv_obj_t *parent)
     lv_obj_set_style_pad_all(cont, 5, LV_PART_MAIN);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
 
+    // Scan for dictionaries
+    int sd_count = dict_scan_stardict();
+
+    // Dictionary selection dropdown (only show if multiple dicts available)
+    if (sd_count > 1) {
+        dict_dropdown = lv_dropdown_create(cont);
+        lv_obj_set_width(dict_dropdown, lv_pct(100));
+
+        // Build options string: "All Dictionaries\nDict1\nDict2\n..."
+        static char dd_options[512];
+        strcpy(dd_options, "All Dictionaries");
+        for (int i = 0; i < sd_count; i++) {
+            const char *name = dict_get_stardict_name(i);
+            if (name) {
+                strncat(dd_options, "\n", sizeof(dd_options) - strlen(dd_options) - 1);
+                strncat(dd_options, name, sizeof(dd_options) - strlen(dd_options) - 1);
+            }
+        }
+        lv_dropdown_set_options(dict_dropdown, dd_options);
+        lv_dropdown_set_selected(dict_dropdown, 0);
+        selected_dict = 0;
+        lv_obj_add_event_cb(dict_dropdown, dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    } else {
+        dict_dropdown = NULL;
+        selected_dict = 0;
+    }
+
     // Search textarea
     search_ta = lv_textarea_create(cont);
     lv_obj_set_width(search_ta, lv_pct(100));
@@ -136,8 +184,17 @@ void ui_dictionary_enter(lv_obj_t *parent)
     status_label = lv_label_create(cont);
     lv_obj_set_width(status_label, lv_pct(100));
     lv_obj_set_style_text_color(status_label, lv_color_make(180, 180, 180), LV_PART_MAIN);
-    if (dict_stardict_available()) {
-        lv_label_set_text(status_label, "StarDict available (SD card)");
+    if (sd_count > 0) {
+        if (sd_count == 1) {
+            const char *name = dict_get_stardict_name(0);
+            static char status_buf[128];
+            snprintf(status_buf, sizeof(status_buf), "Dict: %s", name ? name : "StarDict");
+            lv_label_set_text(status_label, status_buf);
+        } else {
+            static char status_buf[64];
+            snprintf(status_buf, sizeof(status_buf), "%d dictionaries available", sd_count);
+            lv_label_set_text(status_label, status_buf);
+        }
     } else if (dict_offline_en_available()) {
         lv_label_set_text(status_label, "Offline dict available");
     } else {

@@ -89,13 +89,9 @@ static void stop_recording()
     lv_label_set_text(status_label, "Processing...");
 
     // Record 5 seconds of audio using the codec
-    // The recordWAV function records to a PSRAM-allocated buffer
     wav_buffer = NULL;
     wav_size = 0;
 
-    // Use the LilyGoLib codec recording (simplified - record a fixed duration)
-    // In actual implementation, this would use the codec's recordWAV method
-    // For now, provide a placeholder that collects audio
     lv_label_set_text(status_label, "Recording 5 sec...");
 
     // Note: The actual recording would use:

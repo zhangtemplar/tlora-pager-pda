@@ -8,6 +8,7 @@
  *
  * Supports:
  *   - StarDict format (.ifo/.idx/.dict on SD card at /stardict/)
+ *     Multiple dictionaries are supported - scans all .ifo files.
  *   - Custom binary format (dict_en.idx + dict_en.dat on SD root)
  *   - Online lookup via Free Dictionary API
  */
@@ -20,66 +21,99 @@
 #include <SD.h>
 #include <cJSON.h>
 
-// ---- StarDict support ----
-// StarDict format:
-//   .ifo  - text file with metadata (wordcount, idxfilesize, bookname, etc.)
-//   .idx  - binary index: for each word: word\0 + 4-byte offset (BE) + 4-byte size (BE)
-//   .dict - definitions data, accessed by offset+size from .idx
-//
-// We do a linear scan of the .idx file for simplicity (binary search requires
-// loading the index into memory which may be too large for PSRAM).
+// ---- Multi-StarDict support ----
 
-static String stardict_ifo_path;
-static String stardict_idx_path;
-static String stardict_dict_path;
-static bool stardict_paths_found = false;
+static dict_info_t stardict_dicts[MAX_STARDICT_DICTS];
+static int stardict_count = 0;
+static bool stardict_scanned = false;
 
-static bool find_stardict_files()
+static void parse_ifo_bookname(const char *ifo_path, String &bookname)
 {
-    if (stardict_paths_found) return true;
-
-    File dir = SD.open("/stardict");
-    if (!dir || !dir.isDirectory()) return false;
-
-    String base_name;
-    File entry;
-    while ((entry = dir.openNextFile())) {
-        String name = entry.name();
-        if (name.endsWith(".ifo")) {
-            // Extract base name (without extension)
-            base_name = name.substring(0, name.length() - 4);
-            stardict_ifo_path = String("/stardict/") + name;
-            entry.close();
+    File f = SD.open(ifo_path, FILE_READ);
+    if (!f) {
+        bookname = "Unknown";
+        return;
+    }
+    bookname = "Unknown";
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.startsWith("bookname=")) {
+            bookname = line.substring(9);
             break;
         }
+    }
+    f.close();
+}
+
+int dict_scan_stardict()
+{
+    if (stardict_scanned) return stardict_count;
+    stardict_scanned = true;
+    stardict_count = 0;
+
+    File dir = SD.open("/stardict");
+    if (!dir || !dir.isDirectory()) return 0;
+
+    File entry;
+    while ((entry = dir.openNextFile()) && stardict_count < MAX_STARDICT_DICTS) {
+        String name = entry.name();
         entry.close();
+
+        if (!name.endsWith(".ifo")) continue;
+
+        // Extract base name (without .ifo extension)
+        String base_name = name.substring(0, name.length() - 4);
+        String ifo_path = String("/stardict/") + name;
+        String idx_path = String("/stardict/") + base_name + ".idx";
+        String dict_path = String("/stardict/") + base_name + ".dict";
+
+        // Verify companion files exist
+        if (!SD.exists(idx_path.c_str()) || !SD.exists(dict_path.c_str())) {
+            continue;
+        }
+
+        // Parse bookname from .ifo
+        String bookname;
+        parse_ifo_bookname(ifo_path.c_str(), bookname);
+
+        dict_info_t &d = stardict_dicts[stardict_count];
+        d.name = bookname;
+        d.ifo_path = ifo_path;
+        d.idx_path = idx_path;
+        d.dict_path = dict_path;
+        stardict_count++;
     }
     dir.close();
 
-    if (base_name.length() == 0) return false;
-
-    stardict_idx_path = String("/stardict/") + base_name + ".idx";
-    stardict_dict_path = String("/stardict/") + base_name + ".dict";
-
-    if (!SD.exists(stardict_idx_path.c_str()) || !SD.exists(stardict_dict_path.c_str())) {
-        return false;
-    }
-
-    stardict_paths_found = true;
-    return true;
+    return stardict_count;
 }
 
 bool dict_stardict_available()
 {
-    return find_stardict_files();
+    dict_scan_stardict();
+    return stardict_count > 0;
 }
 
-bool dict_lookup_stardict(const char *word, dict_result_t &result)
+int dict_get_stardict_count()
+{
+    dict_scan_stardict();
+    return stardict_count;
+}
+
+const char *dict_get_stardict_name(int index)
+{
+    if (index < 0 || index >= stardict_count) return NULL;
+    return stardict_dicts[index].name.c_str();
+}
+
+// Look up in a single StarDict dictionary by its paths
+static bool stardict_lookup_in(const String &idx_path, const String &dict_path,
+                               const char *word, dict_result_t &result)
 {
     result.found = false;
-    if (!find_stardict_files()) return false;
 
-    File idx_file = SD.open(stardict_idx_path.c_str(), FILE_READ);
+    File idx_file = SD.open(idx_path.c_str(), FILE_READ);
     if (!idx_file) return false;
 
     // Linear scan through the .idx file
@@ -113,7 +147,7 @@ bool dict_lookup_stardict(const char *word, dict_result_t &result)
             idx_file.close();
 
             // Read definition from .dict file
-            File dict_file = SD.open(stardict_dict_path.c_str(), FILE_READ);
+            File dict_file = SD.open(dict_path.c_str(), FILE_READ);
             if (!dict_file) return false;
 
             // Limit read size to prevent OOM
@@ -136,6 +170,44 @@ bool dict_lookup_stardict(const char *word, dict_result_t &result)
     }
 
     idx_file.close();
+    return false;
+}
+
+bool dict_lookup_stardict(const char *word, dict_result_t &result)
+{
+    return dict_lookup_stardict_all(word, result);
+}
+
+bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t &result)
+{
+    result.found = false;
+    dict_scan_stardict();
+    if (dict_index < 0 || dict_index >= stardict_count) return false;
+
+    dict_info_t &d = stardict_dicts[dict_index];
+    bool found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+    if (found) {
+        // Prepend dictionary name to definition
+        string prefix = "[" + string(d.name.c_str()) + "]\n";
+        result.definition = prefix + result.definition;
+    }
+    return found;
+}
+
+bool dict_lookup_stardict_all(const char *word, dict_result_t &result)
+{
+    result.found = false;
+    dict_scan_stardict();
+
+    for (int i = 0; i < stardict_count; i++) {
+        dict_info_t &d = stardict_dicts[i];
+        if (stardict_lookup_in(d.idx_path, d.dict_path, word, result)) {
+            // Prepend dictionary name to definition
+            string prefix = "[" + string(d.name.c_str()) + "]\n";
+            result.definition = prefix + result.definition;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -306,4 +378,9 @@ bool dict_lookup_stardict(const char *word, dict_result_t &result) { result.foun
 bool dict_lookup_offline_en(const char *word, dict_result_t &result) { result.found = false; return false; }
 bool dict_stardict_available() { return false; }
 bool dict_offline_en_available() { return false; }
+int dict_scan_stardict() { return 0; }
+bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t &result) { result.found = false; return false; }
+bool dict_lookup_stardict_all(const char *word, dict_result_t &result) { result.found = false; return false; }
+int dict_get_stardict_count() { return 0; }
+const char *dict_get_stardict_name(int index) { return NULL; }
 #endif

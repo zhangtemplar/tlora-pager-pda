@@ -81,9 +81,6 @@ gemini_response_t gemini_send_audio(const uint8_t *wav_data, size_t wav_len, con
     }
 
     // Build JSON request
-    // We build it manually to avoid allocating another huge buffer for cJSON
-    // Format: {"contents":[{"parts":[{"inline_data":{"mime_type":"audio/wav","data":"..."}},{"text":"..."}]}]}
-
     const char *system_prompt = "Listen to the audio and respond helpfully. If the audio contains speech, "
                                 "respond to what was said. Keep responses concise.";
 
