@@ -21,6 +21,7 @@
 #include <time.h>
 #include <string.h>
 #include "hal_interface.h"
+#include "config_keys.h"
 
 using namespace std;
 

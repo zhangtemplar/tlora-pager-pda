@@ -34,6 +34,11 @@ LV_IMG_DECLARE(img_track);
 LV_IMG_DECLARE(img_compass);
 LV_IMG_DECLARE(img_nfc);
 LV_IMG_DECLARE(img_batter_low);
+LV_IMG_DECLARE(img_calculator);
+LV_IMG_DECLARE(img_dictionary);
+LV_IMG_DECLARE(img_voice_ai);
+LV_IMG_DECLARE(img_weather);
+LV_IMG_DECLARE(img_inet_radio);
 
 LV_IMG_DECLARE(img_background2);
 
@@ -660,6 +665,22 @@ void setupGui()
     create_app(panel, "Power", &img_power, &ui_power_main);
     create_app(panel, "Microphone", &img_microphone, &ui_microphone_main);
     create_app(panel, "IMU", &img_gyroscope, &ui_sensor_main);
+
+    /* New apps */
+    extern app_t ui_calculator_main;
+    create_app(panel, "Calculator", &img_calculator, &ui_calculator_main);
+
+    extern app_t ui_weather_main;
+    create_app(panel, "Weather", &img_weather, &ui_weather_main);
+
+    extern app_t ui_dictionary_main;
+    create_app(panel, "Dictionary", &img_dictionary, &ui_dictionary_main);
+
+    extern app_t ui_voice_ai_main;
+    create_app(panel, "Voice AI", &img_voice_ai, &ui_voice_ai_main);
+
+    extern app_t ui_inet_radio_main;
+    create_app(panel, "Net Radio", &img_inet_radio, &ui_inet_radio_main);
 
     int offset = -10;
     if (lv_display_get_physical_vertical_resolution(NULL) > 320) {
