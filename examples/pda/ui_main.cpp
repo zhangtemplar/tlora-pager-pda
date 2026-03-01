@@ -594,55 +594,33 @@ void setupGui()
     extern app_t ui_power_main ;
     extern app_t ui_calendar_main;
     extern app_t ui_info_main;
-    extern app_t ui_microphone_main;
     extern app_t ui_keyboard_main;
     extern app_t ui_sensor_main;
     extern app_t ui_msgchat_main;
     extern app_t ui_ble_main;
     extern app_t ui_ble_kb_main;
-    extern app_t ui_factory_main;
 
     /* Add application */
-#if defined(USING_IR_REMOTE)
-    extern app_t ui_ir_remote_main;
-    create_app(panel, "IR Remote", &img_ir_remote, &ui_ir_remote_main);
-#endif
-
-#if defined(USING_EXTERN_NRF2401)
-    extern app_t ui_nrf24_main;
-    create_app(panel, "NRF24", &img_radio, &ui_nrf24_main);
-#endif
 
 #if defined(USING_BLE_CONTROL)
     create_app(panel, "Camera Remote", &img_camera, &ui_camera_remote_main);
 #endif
 
-#if defined(USING_SI473X_RADIO)
-    extern app_t ui_si4735_main;
-    create_app(panel, "Radio", &img_si4735, &ui_si4735_main);
-#endif
 
 #if defined(USING_MAG_QMC5883)
     extern app_t ui_compass_main;
     create_app(panel, "Compass", &img_compass, &ui_compass_main);
 #endif
 
-#if defined(USING_TRACKBALL)
-    extern app_t ui_trackball_main;
-    create_app(panel, "Trackball", &img_track, &ui_trackball_main);
-#endif
 
 #if defined(USING_ST25R3916)
     extern app_t ui_nfc_main;
     create_app(panel, "NFC", &img_nfc, &ui_nfc_main);
 #endif
 
-    // #if defined(TODO://)
-    // extern app_t ui_recorder_main;
-    // create_app(panel, "Recorder", &img_track, &ui_recorder_main);
-    // #endif
+    extern app_t ui_recorder_main;
+    create_app(panel, "Recorder", &img_track, &ui_recorder_main);
 
-    create_app(panel, "Screen Test", &img_test, &ui_factory_main);
     create_app(panel, "Setting", &img_configuration, &ui_sys_main);
     create_app(panel, "Wireless", &img_wifi, &ui_wireless_main);
 
@@ -663,7 +641,6 @@ void setupGui()
     create_app(panel, "GPS", &img_gps, &ui_gps_main);
     create_app(panel, "Monitor", &img_monitoring, &ui_monitor_main);
     create_app(panel, "Power", &img_power, &ui_power_main);
-    create_app(panel, "Microphone", &img_microphone, &ui_microphone_main);
     create_app(panel, "IMU", &img_gyroscope, &ui_sensor_main);
 
     /* New apps */

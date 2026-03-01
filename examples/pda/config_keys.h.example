@@ -6,15 +6,15 @@
  * @date      2025-04-01
  * @brief     User-configurable compile-time settings for network-connected features.
  *
- * To enable a feature, uncomment the corresponding #define and fill in your key/value.
- * See config_keys.h.example for a template.
+ * Copy this file to config_keys.h and fill in your values.
+ * config_keys.h is gitignored to protect your credentials.
  */
 #pragma once
 
 // ---- WiFi Credentials ----
 // Primary WiFi network
-#define WIFI_SSID         "kant-netgear"
-#define WIFI_PASSWORD     "sanfeng12@126.com"
+// #define WIFI_SSID         "your-wifi-ssid"
+// #define WIFI_PASSWORD     "your-wifi-password"
 
 // Optional: Secondary WiFi network (auto-fills password when selected in UI)
 // #define WIFI_SSID2        "your-second-ssid"
@@ -22,11 +22,11 @@
 
 // ---- Google Gemini API Key (for Voice AI feature) ----
 // Get your key at: https://aistudio.google.com/app/apikey
-#define GEMINI_API_KEY    "AIzaSyBrliBucTcEw64ZYzML_83m7BtsyFA3C-s"
+// #define GEMINI_API_KEY    "YOUR_GEMINI_API_KEY_HERE"
 
 // ---- OpenWeatherMap API Key (for Weather feature) ----
 // Get your free key at: https://openweathermap.org/api
-#define OWM_API_KEY       "9290d712d2ab70d07975c207ceab7e8e"
+// #define OWM_API_KEY       "YOUR_OWM_API_KEY_HERE"
 
 // ---- Default location for Weather when GPS is unavailable ----
 // Format: "lat=XX.XX&lon=YY.YY" (use https://www.latlong.net to find coordinates)

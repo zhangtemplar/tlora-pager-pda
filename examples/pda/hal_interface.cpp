@@ -358,6 +358,7 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
         if (isMP3) {
             playMP3(buf, read_size);
         } else {
+            instance.codec.playWAV(buf, read_size);
         }
         Serial.println("Play done..");
     }
@@ -525,8 +526,158 @@ void hw_set_mic_stop()
 #endif /*ARDUINO*/
 }
 
+// ==================== Voice Recorder ====================
 
+#if defined(ARDUINO) && defined(USING_AUDIO_CODEC) && defined(HAS_SD_CARD_SOCKET)
 
+#include "_wav_header.h"
+
+static volatile bool recorder_running = false;
+static volatile uint32_t recorder_bytes_written = 0;
+static String recorder_filepath;
+
+static void recorderTask(void *args)
+{
+    const size_t CHUNK_SIZE = 4096;
+    uint8_t *chunk = (uint8_t *)malloc(CHUNK_SIZE);
+    if (!chunk) {
+        Serial.println("Recorder: malloc failed");
+        recorder_running = false;
+        recTaskHandle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Open file and write WAV header placeholder
+    instance.lockSPI();
+    instance.installSD();
+    File f = SD.open(recorder_filepath, FILE_WRITE);
+    instance.unlockSPI();
+
+    if (!f) {
+        Serial.println("Recorder: file open failed");
+        free(chunk);
+        recorder_running = false;
+        recTaskHandle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Write placeholder WAV header (44 bytes)
+    pcm_wav_header_t header = PCM_WAV_HEADER_DEFAULT(0, 16, 16000, 1);
+    instance.lockSPI();
+    f.write((uint8_t *)&header, sizeof(header));
+    instance.unlockSPI();
+
+    // Open codec for recording
+    int ret = instance.codec.open(16, 1, 16000);
+    if (ret < 0) {
+        Serial.printf("Recorder: codec open failed: 0x%X\n", ret);
+        instance.lockSPI();
+        f.close();
+        instance.unlockSPI();
+        free(chunk);
+        recorder_running = false;
+        recTaskHandle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    recorder_bytes_written = 0;
+    Serial.println("Recorder: started");
+
+    while (recorder_running) {
+        instance.codec.read(chunk, CHUNK_SIZE);
+        instance.lockSPI();
+        size_t written = f.write(chunk, CHUNK_SIZE);
+        instance.unlockSPI();
+        if (written != CHUNK_SIZE) {
+            Serial.println("Recorder: write error");
+            break;
+        }
+        recorder_bytes_written += written;
+    }
+
+    // Close codec
+    instance.codec.close();
+
+    // Update WAV header with final size
+    pcm_wav_header_t final_header = PCM_WAV_HEADER_DEFAULT(recorder_bytes_written, 16, 16000, 1);
+    instance.lockSPI();
+    f.seek(0);
+    f.write((uint8_t *)&final_header, sizeof(final_header));
+    f.close();
+    instance.unlockSPI();
+
+    free(chunk);
+    Serial.printf("Recorder: stopped, %lu bytes written\n", recorder_bytes_written);
+
+    recTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
+
+#endif // ARDUINO && USING_AUDIO_CODEC && HAS_SD_CARD_SOCKET
+
+bool hw_recorder_start(const char *filepath)
+{
+#if defined(ARDUINO) && defined(USING_AUDIO_CODEC) && defined(HAS_SD_CARD_SOCKET)
+    if (recorder_running) {
+        return false;
+    }
+    if (!(HW_CODEC_ONLINE & hw_get_device_online())) {
+        return false;
+    }
+    if (!(HW_SD_ONLINE & hw_get_device_online())) {
+        return false;
+    }
+
+    recorder_filepath = String("/") + String(filepath);
+    recorder_running = true;
+    recorder_bytes_written = 0;
+
+    BaseType_t result = xTaskCreate(recorderTask, "recorder", 4096, NULL, 5, &recTaskHandle);
+    if (result != pdPASS) {
+        recorder_running = false;
+        return false;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+void hw_recorder_stop()
+{
+#if defined(ARDUINO) && defined(USING_AUDIO_CODEC) && defined(HAS_SD_CARD_SOCKET)
+    if (recorder_running) {
+        recorder_running = false;
+        // Wait for task to finish
+        while (recTaskHandle != NULL) {
+            delay(10);
+        }
+    }
+#endif
+}
+
+bool hw_recorder_is_recording()
+{
+#if defined(ARDUINO) && defined(USING_AUDIO_CODEC) && defined(HAS_SD_CARD_SOCKET)
+    return recorder_running;
+#else
+    return false;
+#endif
+}
+
+uint32_t hw_recorder_get_duration_ms()
+{
+#if defined(ARDUINO) && defined(USING_AUDIO_CODEC) && defined(HAS_SD_CARD_SOCKET)
+    // 16kHz, 16-bit, mono = 32000 bytes/sec
+    if (recorder_bytes_written == 0) return 0;
+    return (uint32_t)((uint64_t)recorder_bytes_written * 1000 / 32000);
+#else
+    return 0;
+#endif
+}
 
 
 #if  defined(USING_ST25R3916) && defined(ARDUINO)
@@ -966,6 +1117,12 @@ bool hw_get_gps_info(gps_params_t &param)
         param.lat = instance.gps.location.lat();
         param.lng = instance.gps.location.lng();
         param.speed = instance.gps.speed.kmph();
+        if (instance.gps.altitude.isValid())
+            param.altitude = instance.gps.altitude.meters();
+        if (instance.gps.course.isValid())
+            param.course = instance.gps.course.deg();
+        if (instance.gps.hdop.isValid())
+            param.hdop = instance.gps.hdop.hdop();
     }
 
     if (datetime) {
@@ -1003,6 +1160,9 @@ bool hw_get_gps_info(gps_params_t &param)
     param.model = "Dummy";
     param.lat = 0.0;
     param.lng = 0.0;
+    param.altitude = 42.5;
+    param.course = 127.3;
+    param.hdop = 1.2;
     param.speed = rand() % 120;
     param.rx_size = 366666;
     time_t now;
@@ -1143,7 +1303,32 @@ void hw_set_wifi_connect(wifi_conn_params_t &params)
     Serial.print("SSID :"); Serial.println(ssid);
     Serial.print("PWD :"); Serial.println(password);
     WiFi.begin(ssid, password);
+    hw_wifi_save_credentials(params.ssid.c_str(), params.password.c_str());
 #endif
+}
+
+void hw_wifi_save_credentials(const char *ssid, const char *password)
+{
+#ifdef ARDUINO
+    prefs.putString("wifi_ssid", ssid);
+    prefs.putString("wifi_pass", password);
+    Serial.printf("WiFi credentials saved for: %s\n", ssid);
+#endif
+}
+
+bool hw_wifi_auto_connect()
+{
+#ifdef ARDUINO
+    String ssid = prefs.getString("wifi_ssid", "");
+    String password = prefs.getString("wifi_pass", "");
+    if (ssid.length() > 0 && password.length() > 0) {
+        Serial.printf("Auto-connecting to saved WiFi: %s\n", ssid.c_str());
+        WiFi.begin(ssid, password);
+        return true;
+    }
+    Serial.println("No saved WiFi credentials found");
+#endif
+    return false;
 }
 
 bool hw_get_wifi_connected()

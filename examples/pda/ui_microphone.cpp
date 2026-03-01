@@ -8,6 +8,8 @@
  */
 #include "ui_define.h"
 
+#if defined(USING_MICROPHONE_APP)
+
 #define BAR_WIDTH 8
 #define BAR_HEIGHT 75
 #define BAR_SPACING 2
@@ -188,5 +190,7 @@ app_t ui_microphone_main = {
     .exit_func_cb = ui_microphone_exit,
     .user_data = nullptr,
 };
+
+#endif // USING_MICROPHONE_APP
 
 

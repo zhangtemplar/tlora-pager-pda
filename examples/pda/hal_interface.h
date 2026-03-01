@@ -117,6 +117,9 @@ typedef struct  {
     string model;
     double lat;
     double lng;
+    float altitude;
+    float course;
+    float hdop;
     struct tm datetime;
     double speed;
     uint32_t rx_size;
@@ -519,6 +522,21 @@ void hw_set_wifi_connect(wifi_conn_params_t &params);
  * @return True if connected, false otherwise.
  */
 bool hw_get_wifi_connected();
+
+/**
+ * @brief Save WiFi credentials to NVS for auto-connect on boot.
+ *
+ * @param ssid The SSID to save.
+ * @param password The password to save.
+ */
+void hw_wifi_save_credentials(const char *ssid, const char *password);
+
+/**
+ * @brief Auto-connect to WiFi using saved credentials from NVS.
+ *
+ * @return True if saved credentials were found and connection was attempted.
+ */
+bool hw_wifi_auto_connect();
 
 /**
  * @brief Set the radio parameters.
@@ -1507,6 +1525,32 @@ void hw_set_audio_effect_3d(bool enable);
  */
 void hw_set_audio_effect_ab_class(bool enable);
 
+/**
+ * @brief Start recording audio to a WAV file on SD card.
+ *
+ * @param filepath The file path on the SD card (e.g., "recordings/rec_001.wav").
+ * @return True if recording started successfully, false otherwise.
+ */
+bool hw_recorder_start(const char *filepath);
+
+/**
+ * @brief Stop the current recording.
+ */
+void hw_recorder_stop();
+
+/**
+ * @brief Check if the recorder is currently recording.
+ *
+ * @return True if recording, false otherwise.
+ */
+bool hw_recorder_is_recording();
+
+/**
+ * @brief Get the duration of the current recording in milliseconds.
+ *
+ * @return Duration in milliseconds.
+ */
+uint32_t hw_recorder_get_duration_ms();
 
 #if defined(ARDUINO_T_LORA_PAGER)
 #define USING_BLE_KEYBOARD

@@ -6,4 +6,5 @@ script
 test
 *.bk
 *.log
+examples/pda/config_keys.h
 

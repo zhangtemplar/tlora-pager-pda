@@ -81,14 +81,16 @@ void setup()
     // these handlers will be called from another thread.
     WiFi.mode(WIFI_STA);
     WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
-    WiFi.setAutoReconnect(false);
-    WiFi.disconnect(true);
+    WiFi.setAutoReconnect(true);
 
     instance.begin(/*NO_HW_LORA|NO_HW_RTC|NO_HW_GPS|NO_HW_LORA*/);
 
     beginLvglHelper(instance);
 
     hw_init();
+
+    // Auto-connect to saved WiFi credentials (if any)
+    hw_wifi_auto_connect();
 
     setupGui();
 

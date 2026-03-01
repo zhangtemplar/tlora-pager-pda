@@ -8,6 +8,8 @@
  */
 #include "ui_define.h"
 
+#if defined(USING_SCREEN_TEST)
+
 static uint8_t *image_data = NULL;
 static lv_timer_t *timer = NULL;
 static uint8_t nextColors = 0;
@@ -134,4 +136,6 @@ app_t ui_factory_main = {
     .exit_func_cb = ui_factory_exit,
     .user_data = nullptr,
 };
+
+#endif // USING_SCREEN_TEST
 

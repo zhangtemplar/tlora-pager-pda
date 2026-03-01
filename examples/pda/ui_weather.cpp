@@ -193,31 +193,33 @@ static void weather_fetch_task(void *param)
 #ifdef OWM_API_KEY
     char url[256];
 
-    // Determine location
-    const char *city = NULL;
+    // Determine location: GPS > configured coords > default city
     gps_params_t gps;
     bool use_gps = false;
+    bool use_coords = false;
     if (hw_get_gps_info(gps) && gps.lat != 0 && gps.lng != 0) {
         use_gps = true;
     }
 
-#ifdef WEATHER_DEFAULT_CITY
-    if (!use_gps) city = WEATHER_DEFAULT_CITY;
+#ifdef WEATHER_DEFAULT_COORDS
+    if (!use_gps) use_coords = true;
 #endif
-
-    if (!use_gps && !city) {
-        city = "Shenzhen";
-    }
 
     // Current weather
     if (use_gps) {
         snprintf(url, sizeof(url),
                  "https://api.openweathermap.org/data/2.5/weather?lat=%.4f&lon=%.4f&units=metric&appid=%s",
                  gps.lat, gps.lng, OWM_API_KEY);
+    } else if (use_coords) {
+#ifdef WEATHER_DEFAULT_COORDS
+        snprintf(url, sizeof(url),
+                 "https://api.openweathermap.org/data/2.5/weather?%s&units=metric&appid=%s",
+                 WEATHER_DEFAULT_COORDS, OWM_API_KEY);
+#endif
     } else {
         snprintf(url, sizeof(url),
                  "https://api.openweathermap.org/data/2.5/weather?q=%s&units=metric&appid=%s",
-                 city, OWM_API_KEY);
+                 "San Carlos,CA,US", OWM_API_KEY);
     }
 
     http_response_t resp = http_get(url, 10000);
@@ -230,10 +232,16 @@ static void weather_fetch_task(void *param)
         snprintf(url, sizeof(url),
                  "https://api.openweathermap.org/data/2.5/forecast?lat=%.4f&lon=%.4f&units=metric&appid=%s",
                  gps.lat, gps.lng, OWM_API_KEY);
+    } else if (use_coords) {
+#ifdef WEATHER_DEFAULT_COORDS
+        snprintf(url, sizeof(url),
+                 "https://api.openweathermap.org/data/2.5/forecast?%s&units=metric&appid=%s",
+                 WEATHER_DEFAULT_COORDS, OWM_API_KEY);
+#endif
     } else {
         snprintf(url, sizeof(url),
                  "https://api.openweathermap.org/data/2.5/forecast?q=%s&units=metric&appid=%s",
-                 city, OWM_API_KEY);
+                 "San Carlos,CA,US", OWM_API_KEY);
     }
 
     resp = http_get(url, 10000);
