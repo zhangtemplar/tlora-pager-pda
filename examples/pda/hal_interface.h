@@ -797,6 +797,16 @@ void hw_set_ble_key(media_key_value_t key);
 void hw_set_keyboard_read_callback(void(*read)(int state, char &c));
 
 /**
+ * @brief Set the callback for the physical back button (GPIO 0).
+ *
+ * If NULL, the default behavior is to find the active menu and click
+ * its back button automatically.
+ *
+ * @param cb A pointer to the callback function, or NULL for default.
+ */
+void hw_set_back_button_callback(void(*cb)());
+
+/**
  * @brief Provide hardware feedback.
  *
  * This function is used to trigger some form of hardware feedback, such as a

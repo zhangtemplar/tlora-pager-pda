@@ -772,6 +772,14 @@ const uint8_t mic_gain = 10;
 #endif
 
 
+// Forward declarations for global keyboard/back button handlers
+#if defined(ARDUINO) && defined(USING_INPUT_DEV_KEYBOARD)
+static void global_keyboard_wrapper(int state, char &c);
+#endif
+#ifdef ARDUINO
+static void back_btn_timer_cb(lv_timer_t *t);
+#endif
+
 void hw_init()
 {
 #ifdef ARDUINO
@@ -827,6 +835,14 @@ void hw_init()
     });
 #endif //USING_INPUT_DEV_KEYBOARD
 
+    // Register global keyboard navigation wrapper
+#ifdef USING_INPUT_DEV_KEYBOARD
+    instance.kb.setCallback(global_keyboard_wrapper);
+#endif
+
+    // Setup GPIO 0 (BOOT button) as physical back button
+    pinMode(0, INPUT_PULLUP);
+    lv_timer_create(back_btn_timer_cb, 50, NULL);
 
     xTaskCreate(playerTask, "app/play", 8 * 1024, NULL, 12, &playerTaskHandler);
 
@@ -1963,10 +1979,137 @@ void hw_set_ble_key(media_key_value_t key)
 #endif
 }
 
+// --- Global keyboard navigation & back button ---
+
+#if defined(ARDUINO) && defined(USING_INPUT_DEV_KEYBOARD)
+static void(*app_keyboard_cb)(int state, char &c) = NULL;
+
+// Recursively find the first scrollable object with actual scroll range
+static lv_obj_t *find_scrollable_in_tree(lv_obj_t *parent)
+{
+    if (!parent) return NULL;
+    uint32_t cnt = lv_obj_get_child_count(parent);
+    for (uint32_t i = 0; i < cnt; i++) {
+        lv_obj_t *child = lv_obj_get_child(parent, i);
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_SCROLLABLE)) {
+            int range = lv_obj_get_scroll_top(child) + lv_obj_get_scroll_bottom(child);
+            if (range > 5) return child;
+        }
+        lv_obj_t *found = find_scrollable_in_tree(child);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+// Find scroll target by searching the app tile's widget tree
+static lv_obj_t *find_scroll_target()
+{
+    extern lv_obj_t *main_screen;
+    if (!main_screen) return NULL;
+    // tile[1] is the app area
+    lv_obj_t *app_tile = lv_obj_get_child(main_screen, 1);
+    if (!app_tile) return NULL;
+    return find_scrollable_in_tree(app_tile);
+}
+
+// Global navigation: Space+key combos (symbol-mode characters)
+//   Space+W='2' scroll up, Space+S='/' scroll down
+//   Space+P='0' page up,   Space+N=',' page down
+static bool handle_global_nav(int state, char c)
+{
+    if (state != 1) return false;
+
+    lv_obj_t *target = find_scroll_target();
+    if (!target) return false;
+
+    int line = 30;
+    int page = lv_disp_get_ver_res(NULL) - 40;
+
+    switch (c) {
+    case '2':  // Space+W
+        lv_obj_scroll_by(target, 0, line, LV_ANIM_ON);
+        return true;
+    case '/':  // Space+S
+        lv_obj_scroll_by(target, 0, -line, LV_ANIM_ON);
+        return true;
+    case '0':  // Space+P
+        lv_obj_scroll_by(target, 0, page, LV_ANIM_ON);
+        return true;
+    case ',':  // Space+N
+        lv_obj_scroll_by(target, 0, -page, LV_ANIM_ON);
+        return true;
+    }
+    return false;
+}
+
+static void global_keyboard_wrapper(int state, char &c)
+{
+    // App-specific callback gets first priority
+    if (app_keyboard_cb) {
+        app_keyboard_cb(state, c);
+        if (c == 0) return;
+    }
+
+    // Global Space+key navigation shortcuts
+    if (handle_global_nav(state, c)) {
+        c = 0;
+    }
+}
+#endif
+
 void hw_set_keyboard_read_callback(void(*read)(int state, char &c))
 {
 #if defined(ARDUINO) && defined(USING_INPUT_DEV_KEYBOARD)
-    instance.kb.setCallback(read);
+    app_keyboard_cb = read;
+    // Always keep the global wrapper as the actual callback
+    instance.kb.setCallback(global_keyboard_wrapper);
+#endif
+}
+
+// --- Physical back button (GPIO 0) ---
+
+#ifdef ARDUINO
+static void(*back_button_cb)() = NULL;
+
+static void back_btn_timer_cb(lv_timer_t *t)
+{
+    static bool last_state = true;
+    bool current = digitalRead(0);
+
+    if (last_state && !current) {
+        // Falling edge = button pressed
+        if (back_button_cb) {
+            back_button_cb();
+        } else {
+            // Default: find the active menu on app tile and click its back button
+            // main_screen is a tileview; tile[1] is the app area
+            extern lv_obj_t *main_screen;
+            if (main_screen) {
+                lv_obj_t *app_tile = lv_obj_get_child(main_screen, 1);
+                if (app_tile) {
+                    uint32_t cnt = lv_obj_get_child_count(app_tile);
+                    for (uint32_t i = 0; i < cnt; i++) {
+                        lv_obj_t *child = lv_obj_get_child(app_tile, i);
+                        if (lv_obj_check_type(child, &lv_menu_class)) {
+                            lv_obj_t *back_btn = lv_menu_get_main_header_back_button(child);
+                            if (back_btn) {
+                                lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    last_state = current;
+}
+#endif
+
+void hw_set_back_button_callback(void(*cb)())
+{
+#ifdef ARDUINO
+    back_button_cb = cb;
 #endif
 }
 

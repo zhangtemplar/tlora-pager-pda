@@ -146,7 +146,7 @@ static void ta_event_cb(lv_event_t *e)
 #ifdef ARDUINO
                 char *prompt = strdup(text);
                 if (prompt) {
-                    xTaskCreatePinnedToCore(ai_text_task, "ai_text", 8192, prompt, 5, &ai_task, 0);
+                    xTaskCreatePinnedToCore(ai_text_task, "ai_text", 16384, prompt, 5, &ai_task, 0);
                 }
 #endif
                 lv_textarea_set_text(ta, "");
@@ -165,7 +165,7 @@ static void ta_event_cb(lv_event_t *e)
 #ifdef ARDUINO
                     char *prompt = strdup(text);
                     if (prompt) {
-                        xTaskCreatePinnedToCore(ai_text_task, "ai_text", 8192, prompt, 5, &ai_task, 0);
+                        xTaskCreatePinnedToCore(ai_text_task, "ai_text", 16384, prompt, 5, &ai_task, 0);
                     }
 #endif
                     lv_textarea_set_text(ta, "");

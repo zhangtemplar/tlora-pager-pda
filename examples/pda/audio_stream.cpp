@@ -251,7 +251,7 @@ bool radio_stream_start(const char *url)
     url_buf[sizeof(url_buf) - 1] = '\0';
 
     // Start tasks
-    xTaskCreatePinnedToCore(http_stream_task, "radio_http", 8192, url_buf, 5, &stream_task, 0);
+    xTaskCreatePinnedToCore(http_stream_task, "radio_http", 16384, url_buf, 5, &stream_task, 0);
     xTaskCreatePinnedToCore(mp3_decode_task, "radio_mp3", 16384, NULL, 12, &decode_task, 1);
 
     return true;

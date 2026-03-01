@@ -39,6 +39,13 @@ LV_IMG_DECLARE(img_dictionary);
 LV_IMG_DECLARE(img_voice_ai);
 LV_IMG_DECLARE(img_weather);
 LV_IMG_DECLARE(img_inet_radio);
+LV_IMG_DECLARE(img_w_clear);
+LV_IMG_DECLARE(img_w_pcloudy);
+LV_IMG_DECLARE(img_w_cloud);
+LV_IMG_DECLARE(img_w_rain);
+LV_IMG_DECLARE(img_w_storm);
+LV_IMG_DECLARE(img_w_snow);
+LV_IMG_DECLARE(img_w_mist);
 
 LV_IMG_DECLARE(img_background2);
 

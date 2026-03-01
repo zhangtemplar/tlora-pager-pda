@@ -28,6 +28,6 @@
 // Get your free key at: https://openweathermap.org/api
 #define OWM_API_KEY       "9290d712d2ab70d07975c207ceab7e8e"
 
-// ---- Default location for Weather when GPS is unavailable ----
-// Format: "lat=XX.XX&lon=YY.YY" (use https://www.latlong.net to find coordinates)
-// #define WEATHER_DEFAULT_COORDS  "lat=37.49&lon=-122.27"
+// ---- Weather Notes ----
+// Location priority: GPS fix > cached GPS > fallback (San Carlos, CA: 37.49, -122.27)
+// GPS coordinates are cached in NVS automatically after first fix.
