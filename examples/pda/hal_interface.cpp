@@ -795,7 +795,7 @@ void hw_init()
 #endif //USING_AUDIO_CODEC
 
 #ifdef USING_INPUT_DEV_KEYBOARD
-    instance.attachKeyboardFeedback(true, 80);
+    instance.attachKeyboardFeedback(false, 80);
 
     instance.setFeedbackCallback([](void *args) {
 
