@@ -666,6 +666,8 @@ void setupGui()
     extern app_t ui_inet_radio_main;
     create_app(panel, "Net Radio", &img_inet_radio, &ui_inet_radio_main);
 
+    create_app(panel, "Calendar", &img_calendar, &ui_calendar_main);
+
     int offset = -10;
     if (lv_display_get_physical_vertical_resolution(NULL) > 320) {
         offset = -45;
