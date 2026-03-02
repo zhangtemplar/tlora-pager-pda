@@ -78,12 +78,22 @@ typedef struct {
 
 static clock_label_t clock_label;
 
+static struct {
+    lv_obj_t *cont;
+    lv_obj_t *time_label;
+    lv_obj_t *wifi_icon;
+    lv_obj_t *bt_icon;
+    lv_obj_t *battery_label;
+    lv_obj_t *battery_bar;
+} status_bar_ui;
+
 #if LVGL_VERSION_MAJOR == 9
 static uint32_t name_change_id;
 #endif
 
 
 static lv_obj_t *desc_label;
+static void status_bar_update();
 static RTC_DATA_ATTR uint8_t brightness_level = 0;
 static RTC_DATA_ATTR uint8_t keyboard_level = 0;
 
@@ -160,7 +170,7 @@ static void btn_event_cb(lv_event_t *e)
 static void create_app(lv_obj_t *parent, const char *name, const lv_img_dsc_t *img, app_t *app_fun)
 {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_coord_t w = 150;
+    lv_coord_t w = 100;
     lv_coord_t h = LV_PCT(100);
 
     lv_obj_set_size(btn, w, h);
@@ -462,6 +472,11 @@ static void hw_device_poll(lv_timer_t *t)
 
 static void ui_poll_timer_callback(lv_timer_t *t)
 {
+    /* Update status bar when launcher is visible */
+    if (!lv_obj_has_flag(main_screen, LV_OBJ_FLAG_HIDDEN)) {
+        status_bar_update();
+    }
+
     bool timeout = lv_display_get_inactive_time(NULL) > SCREEN_TIMEOUT;
     if (timeout) {
         if (!lv_obj_has_flag(main_screen, LV_OBJ_FLAG_HIDDEN) && get_enter_low_power_flag()) {
@@ -531,6 +546,36 @@ static void ui_poll_timer_callback(lv_timer_t *t)
     }
 }
 
+static void status_bar_update()
+{
+    if (!status_bar_ui.cont) return;
+
+    const char *week[] = {"Sun", "Mon", "Tue", "Wed", "Thur", "Fri", "Sat"};
+    struct tm timeinfo;
+    hw_get_date_time(timeinfo);
+    uint8_t week_index = timeinfo.tm_wday > 6 ? 6 : timeinfo.tm_wday;
+    lv_label_set_text_fmt(status_bar_ui.time_label, "%02d:%02d  %02d-%02d %s",
+                          timeinfo.tm_hour, timeinfo.tm_min,
+                          timeinfo.tm_mon + 1, timeinfo.tm_mday, week[week_index]);
+
+    monitor_params_t params;
+    hw_get_monitor_params(params);
+    lv_label_set_text_fmt(status_bar_ui.battery_label, "%d%%", params.battery_percent);
+    lv_bar_set_value(status_bar_ui.battery_bar, params.battery_percent, LV_ANIM_OFF);
+
+    if (hw_get_wifi_connected()) {
+        lv_obj_remove_flag(status_bar_ui.wifi_icon, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(status_bar_ui.wifi_icon, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (hw_get_ble_kb_connected()) {
+        lv_obj_remove_flag(status_bar_ui.bt_icon, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(status_bar_ui.bt_icon, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void setupGui()
 {
 
@@ -580,13 +625,75 @@ void setupGui()
     lv_obj_set_scrollbar_mode(main_screen, LV_SCROLLBAR_MODE_OFF);
     lv_obj_remove_flag(main_screen, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* ---- Status bar ---- */
+    lv_obj_t *status_bar = lv_obj_create(menu_panel);
+    lv_obj_set_size(status_bar, LV_PCT(100), 24);
+    lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_radius(status_bar, 0, 0);
+    lv_obj_set_style_border_width(status_bar, 0, 0);
+    lv_obj_set_style_pad_all(status_bar, 2, 0);
+    lv_obj_set_style_bg_color(status_bar, lv_color_hex(0x1a1a1a), 0);
+    lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(status_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(status_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    status_bar_ui.cont = status_bar;
+
+    /* Left: time + date */
+    lv_obj_t *time_label = lv_label_create(status_bar);
+    lv_obj_set_style_text_font(time_label, MAIN_FONT, 0);
+    lv_obj_set_style_text_color(time_label, lv_color_white(), 0);
+    lv_label_set_text(time_label, "00:00  01-01 Sun");
+    status_bar_ui.time_label = time_label;
+
+    /* Right side container */
+    lv_obj_t *right_cont = lv_obj_create(status_bar);
+    lv_obj_set_size(right_cont, LV_SIZE_CONTENT, LV_PCT(100));
+    lv_obj_set_style_bg_opa(right_cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(right_cont, 0, 0);
+    lv_obj_set_style_pad_all(right_cont, 0, 0);
+    lv_obj_set_style_pad_column(right_cont, 6, 0);
+    lv_obj_remove_flag(right_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(right_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(right_cont, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    /* WiFi icon */
+    lv_obj_t *wifi_icon = lv_label_create(right_cont);
+    lv_obj_set_style_text_color(wifi_icon, lv_color_white(), 0);
+    lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
+    lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_HIDDEN);
+    status_bar_ui.wifi_icon = wifi_icon;
+
+    /* Bluetooth icon */
+    lv_obj_t *bt_icon = lv_label_create(right_cont);
+    lv_obj_set_style_text_color(bt_icon, lv_color_white(), 0);
+    lv_label_set_text(bt_icon, LV_SYMBOL_BLUETOOTH);
+    lv_obj_add_flag(bt_icon, LV_OBJ_FLAG_HIDDEN);
+    status_bar_ui.bt_icon = bt_icon;
+
+    /* Battery percentage */
+    lv_obj_t *batt_label = lv_label_create(right_cont);
+    lv_obj_set_style_text_color(batt_label, lv_color_white(), 0);
+    lv_label_set_text(batt_label, "100%");
+    status_bar_ui.battery_label = batt_label;
+
+    /* Battery bar */
+    lv_obj_t *batt_bar = lv_bar_create(right_cont);
+    lv_obj_set_size(batt_bar, 30, 12);
+    lv_bar_set_value(batt_bar, 100, LV_ANIM_OFF);
+    lv_obj_set_style_radius(batt_bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(batt_bar, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(batt_bar, lv_color_hex(0x555555), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(batt_bar, lv_color_make(0, 255, 0), LV_PART_INDICATOR);
+    status_bar_ui.battery_bar = batt_bar;
+
     /* Initialize the menu view */
     lv_obj_t *panel = lv_obj_create(menu_panel);
     lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_size(panel, LV_PCT(100), LV_PCT(70));
+    lv_obj_set_size(panel, LV_PCT(100), LV_PCT(65));
     lv_obj_set_scroll_snap_x(panel, LV_SCROLL_SNAP_CENTER);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align_to(panel, status_bar, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     lv_obj_add_style(panel, &style_frameless, 0);
 #if  defined(USING_TOUCHPAD) || defined(USING_TOUCH_KEYBOARD)
     lv_obj_add_event_cb(panel, scrollbar_change_cb, LV_EVENT_SCROLL_END, NULL);
@@ -681,6 +788,9 @@ void setupGui()
     if (lv_display_get_physical_horizontal_resolution(NULL) < 320) {
         lv_obj_set_style_text_font(desc_label, &font_alibaba_24, 0);
         lv_obj_align(desc_label, LV_ALIGN_BOTTOM_MID, 0, -25);
+    } else if (lv_display_get_physical_vertical_resolution(NULL) <= 222) {
+        /* Compact label for short screens like T-LoRa Pager (480x222) */
+        lv_obj_set_style_text_font(desc_label, &font_alibaba_24, 0);
     } else {
         lv_obj_set_style_text_font(desc_label, &font_alibaba_40, 0);
     }
@@ -705,6 +815,9 @@ void setupGui()
     disp_timer = lv_timer_create(ui_poll_timer_callback, 1000, NULL);
 
     dev_timer = lv_timer_create(hw_device_poll, 5000, NULL);
+
+    /* Populate status bar immediately */
+    status_bar_update();
 
     // Allow low power mode
     set_low_power_mode_flag(true);
