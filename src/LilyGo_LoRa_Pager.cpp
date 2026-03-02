@@ -464,12 +464,20 @@ bool LilyGoLoRaPager::installSD()
 #ifdef EXPANDS_SD_DET
     io.pinMode(EXPANDS_SD_DET, INPUT);
     if (io.digitalRead(EXPANDS_SD_DET)) {
+        log_d("SD card detect pin indicates no card inserted");
         return false;
     }
 #endif /*EXPANDS_SD_DET*/
 
     initShareSPIPins();
-    // Set mount point to /fs
+
+    // Enable internal pull-up on MISO — the display controller weakly
+    // pulls the shared MISO line LOW when deselected, which prevents
+    // SD card communication without a pull-up.
+    gpio_pullup_en((gpio_num_t)MISO);
+    gpio_pulldown_dis((gpio_num_t)MISO);
+
+    // Set mount point to /sd
     if (!SD.begin(SD_CS, SPI, 4000000U, "/sd")) {
         log_e("Failed to detect SD Card!!");
         return false;
