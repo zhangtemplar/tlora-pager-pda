@@ -157,7 +157,27 @@ static void weather_keyboard_cb(int state, char &c)
     c = 0;
 }
 
-// --- Build forecast entries (called once when data arrives) ---
+// --- Build forecast tables (called once when data arrives) ---
+
+static void setup_table(lv_obj_t *table, int tw)
+{
+    lv_table_set_column_count(table, 6);
+    lv_table_set_column_width(table, 0, tw * 14 / 100);  // Time/Day
+    lv_table_set_column_width(table, 1, tw * 24 / 100);  // Weather
+    lv_table_set_column_width(table, 2, tw * 18 / 100);  // Temp
+    lv_table_set_column_width(table, 3, tw * 14 / 100);  // Humidity
+    lv_table_set_column_width(table, 4, tw * 16 / 100);  // Wind
+    lv_table_set_column_width(table, 5, tw * 14 / 100);  // Rain
+
+    lv_obj_set_width(table, lv_pct(100));
+    lv_obj_remove_flag(table, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_top(table, 2, LV_PART_ITEMS);
+    lv_obj_set_style_pad_bottom(table, 2, LV_PART_ITEMS);
+    lv_obj_set_style_pad_left(table, 3, LV_PART_ITEMS);
+    lv_obj_set_style_pad_right(table, 2, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(table, 1, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(table, lv_color_make(60, 60, 60), LV_PART_ITEMS);
+}
 
 static void build_forecast_ui()
 {
@@ -166,53 +186,63 @@ static void build_forecast_ui()
 
     forecast_ui_built = true;
     lv_group_t *g = lv_group_get_default();
+    int tw = lv_disp_get_hor_res(NULL) - 20;
+    char buf[16];
 
-    // --- Section: 24-Hour Forecast ---
+    // --- 24-Hour Forecast ---
     lv_obj_t *h_hdr = lv_menu_cont_create(main_page);
     lv_obj_t *h_lbl = lv_label_create(h_hdr);
-    lv_label_set_text(h_lbl, "-- 24-Hour Forecast --");
+    lv_label_set_text(h_lbl, "24-Hour Forecast");
     lv_obj_set_style_text_color(h_lbl, lv_color_make(100, 200, 255), 0);
     if (g) lv_group_add_obj(g, h_hdr);
 
-    // Column header: Time  Desc  Temp  Hum  Wind  Rain
-    lv_obj_t *hc = lv_menu_cont_create(main_page);
-    lv_obj_t *hcl = lv_label_create(hc);
-    lv_label_set_text(hcl, "Time  Wthr  Temp Hum  Wind Rain");
-    lv_obj_set_style_text_color(hcl, lv_color_make(180, 180, 180), 0);
+    lv_obj_t *ht = lv_table_create(main_page);
+    setup_table(ht, tw);
+    lv_table_set_row_count(ht, hourly_count + 1);
+    const char *hcols[] = {"Time", "Weather", "Temp", "Hum", "Wind", "Rain"};
+    for (int j = 0; j < 6; j++) lv_table_set_cell_value(ht, 0, j, hcols[j]);
 
     for (int i = 0; i < hourly_count; i++) {
-        lv_obj_t *cont = lv_menu_cont_create(main_page);
-        lv_obj_t *label = lv_label_create(cont);
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s %-5s %3.0f\xC2\xB0 %3d%% %4.1f %3d%%",
-                 hourly[i].time_str, hourly[i].desc, hourly[i].temp,
-                 hourly[i].humidity, hourly[i].wind, hourly[i].pop_pct);
-        lv_label_set_text(label, buf);
+        int r = i + 1;
+        lv_table_set_cell_value(ht, r, 0, hourly[i].time_str);
+        lv_table_set_cell_value(ht, r, 1, hourly[i].desc);
+        snprintf(buf, sizeof(buf), "%.0f\xC2\xB0" "C", hourly[i].temp);
+        lv_table_set_cell_value(ht, r, 2, buf);
+        snprintf(buf, sizeof(buf), "%d%%", hourly[i].humidity);
+        lv_table_set_cell_value(ht, r, 3, buf);
+        snprintf(buf, sizeof(buf), "%.1fm/s", hourly[i].wind);
+        lv_table_set_cell_value(ht, r, 4, buf);
+        snprintf(buf, sizeof(buf), "%d%%", hourly[i].pop_pct);
+        lv_table_set_cell_value(ht, r, 5, buf);
     }
 
-    // --- Section: 8-Day Forecast ---
+    // --- 8-Day Forecast ---
     lv_obj_t *d_hdr = lv_menu_cont_create(main_page);
     lv_obj_t *d_lbl = lv_label_create(d_hdr);
-    lv_label_set_text(d_lbl, "-- 8-Day Forecast --");
+    lv_label_set_text(d_lbl, "8-Day Forecast");
     lv_obj_set_style_text_color(d_lbl, lv_color_make(100, 200, 255), 0);
     if (g) lv_group_add_obj(g, d_hdr);
 
-    // Column header: Day  Desc  Lo/Hi  Hum  Wind  Rain
-    lv_obj_t *dc = lv_menu_cont_create(main_page);
-    lv_obj_t *dcl = lv_label_create(dc);
-    lv_label_set_text(dcl, "Day   Wthr  Lo/Hi Hum  Wind Rain");
-    lv_obj_set_style_text_color(dcl, lv_color_make(180, 180, 180), 0);
+    lv_obj_t *dt = lv_table_create(main_page);
+    setup_table(dt, tw);
+    lv_table_set_row_count(dt, daily_count + 1);
+    const char *dcols[] = {"Day", "Weather", "Lo/Hi", "Hum", "Wind", "Rain"};
+    for (int j = 0; j < 6; j++) lv_table_set_cell_value(dt, 0, j, dcols[j]);
 
     for (int i = 0; i < daily_count; i++) {
-        lv_obj_t *cont = lv_menu_cont_create(main_page);
-        lv_obj_t *label = lv_label_create(cont);
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s %-5s %2.0f/%2.0f %3d%% %4.1f %3d%%",
-                 daily[i].day_str, daily[i].desc,
-                 daily[i].temp_min, daily[i].temp_max,
-                 daily[i].humidity, daily[i].wind, daily[i].pop_pct);
-        lv_label_set_text(label, buf);
+        int r = i + 1;
+        lv_table_set_cell_value(dt, r, 0, daily[i].day_str);
+        lv_table_set_cell_value(dt, r, 1, daily[i].desc);
+        snprintf(buf, sizeof(buf), "%.0f/%.0f\xC2\xB0", daily[i].temp_min, daily[i].temp_max);
+        lv_table_set_cell_value(dt, r, 2, buf);
+        snprintf(buf, sizeof(buf), "%d%%", daily[i].humidity);
+        lv_table_set_cell_value(dt, r, 3, buf);
+        snprintf(buf, sizeof(buf), "%.1fm/s", daily[i].wind);
+        lv_table_set_cell_value(dt, r, 4, buf);
+        snprintf(buf, sizeof(buf), "%d%%", daily[i].pop_pct);
+        lv_table_set_cell_value(dt, r, 5, buf);
     }
+
     printf("[Weather] forecast UI built: %d hourly + %d daily\n",
            hourly_count, daily_count);
 }
