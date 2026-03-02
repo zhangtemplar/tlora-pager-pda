@@ -68,6 +68,7 @@ static void rec_btn_event(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code != LV_EVENT_CLICKED) return;
 
+    Serial.printf("[Recorder UI] btn clicked, is_recording=%d\n", is_recording);
     if (!is_recording) {
         char filename[64];
         generate_filename(filename, sizeof(filename));
@@ -77,10 +78,13 @@ static void rec_btn_event(lv_event_t *e)
             lv_label_set_text(rec_btn_label, LV_SYMBOL_STOP);
             lv_label_set_text(status_label, "Recording...");
             lv_label_set_text(duration_label, "0:00");
+            Serial.println("[Recorder UI] Recording started");
         } else {
             lv_label_set_text(status_label, "Start failed");
+            Serial.println("[Recorder UI] Start failed");
         }
     } else {
+        Serial.println("[Recorder UI] Stopping recording...");
         lv_label_set_text(status_label, "Saving...");
         lv_label_set_text(rec_btn_label, LV_SYMBOL_AUDIO);
         lv_refr_now(NULL);

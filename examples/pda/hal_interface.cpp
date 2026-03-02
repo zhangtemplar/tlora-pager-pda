@@ -76,12 +76,25 @@ BleKeyboard bleKeyboard;
  */
 static bool sd_mounted = false;
 
+// Deselect all SPI devices sharing the bus so they don't
+// interfere with SD card communication.
+static void sd_deselect_all_spi()
+{
+    // Deselect display, NFC, LoRa (all share MISO/MOSI/SCK)
+    const uint8_t cs_pins[] = { DISP_CS, NFC_CS, LORA_CS };
+    for (auto pin : cs_pins) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, HIGH);
+    }
+    // MISO pull-up: display pulls MISO LOW when deselected
+    gpio_pullup_en((gpio_num_t)MISO);
+    gpio_pulldown_dis((gpio_num_t)MISO);
+}
+
 bool hw_sd_begin()
 {
-    // Skip re-init if already mounted
-    if (sd_mounted && SD.cardType() != CARD_NONE) {
-        return true;
-    }
+    // Always deselect other SPI devices before SD access
+    sd_deselect_all_spi();
 
     // Enable SD card power
     instance.io.pinMode(EXPANDS_SD_EN, OUTPUT);
@@ -91,19 +104,15 @@ bool hw_sd_begin()
     instance.io.pinMode(EXPANDS_SD_PULLEN, OUTPUT);
     instance.io.digitalWrite(EXPANDS_SD_PULLEN, HIGH);
 
-    // Enable internal pull-up on MISO (GPIO 33) — the display controller
-    // shares the SPI bus and weakly pulls MISO LOW when deselected.
-    gpio_pullup_en((gpio_num_t)MISO);
-    gpio_pulldown_dis((gpio_num_t)MISO);
+    // Only call SD.begin() once — repeated calls can invalidate open file handles
+    if (sd_mounted) return true;
 
     if (!SD.begin(SD_CS, SPI, 4000000U, "/sd")) {
         Serial.println("[SD] SD.begin() FAILED");
-        sd_mounted = false;
         return false;
     }
     if (SD.cardType() == CARD_NONE) {
         Serial.println("[SD] cardType is CARD_NONE");
-        sd_mounted = false;
         return false;
     }
     Serial.printf("[SD] OK, cardType=%d, size=%llu MB\n", SD.cardType(), SD.cardSize() / (1024 * 1024));
@@ -586,7 +595,9 @@ static String recorder_filepath;
 
 static void recorderTask(void *args)
 {
-    const size_t CHUNK_SIZE = 4096;
+    // Use 512-byte chunks so SPI lock is held for only ~16ms per iteration,
+    // allowing display to refresh between writes.
+    const size_t CHUNK_SIZE = 512;
     uint8_t *chunk = (uint8_t *)malloc(CHUNK_SIZE);
     if (!chunk) {
         Serial.println("Recorder: malloc failed");
@@ -596,14 +607,14 @@ static void recorderTask(void *args)
         return;
     }
 
-    // Open file and write WAV header placeholder
+    // Open file and write WAV header — keep SPI lock for entire SD sequence
     instance.lockSPI();
-    hw_sd_begin();
-    File f = SD.open(recorder_filepath, FILE_WRITE);
-    instance.unlockSPI();
+    bool sd_ok = hw_sd_begin();
+    Serial.printf("[Recorder] Task: hw_sd_begin()=%d, path=%s\n", sd_ok, recorder_filepath.c_str());
 
-    if (!f) {
-        Serial.println("Recorder: file open failed");
+    if (!sd_ok) {
+        Serial.println("[Recorder] Task: SD mount failed");
+        instance.unlockSPI();
         free(chunk);
         recorder_running = false;
         recTaskHandle = NULL;
@@ -611,14 +622,35 @@ static void recorderTask(void *args)
         return;
     }
 
-    // Write placeholder WAV header (44 bytes)
-    pcm_wav_header_t header = PCM_WAV_HEADER_DEFAULT(0, 16, 16000, 1);
-    instance.lockSPI();
-    f.write((uint8_t *)&header, sizeof(header));
-    instance.unlockSPI();
+    // Ensure recordings directory exists
+    if (!SD.exists("/recordings")) {
+        Serial.println("[Recorder] Task: Creating /recordings/");
+        SD.mkdir("/recordings");
+    }
 
-    // Open codec for recording
+    File f = SD.open(recorder_filepath, FILE_WRITE);
+    Serial.printf("[Recorder] Task: SD.open() result=%d\n", (bool)f);
+
+    if (!f) {
+        Serial.printf("[Recorder] Task: file open FAILED for: %s\n", recorder_filepath.c_str());
+        instance.unlockSPI();
+        free(chunk);
+        recorder_running = false;
+        recTaskHandle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Write placeholder WAV header (44 bytes) and flush while SPI is still locked
+    pcm_wav_header_t header = PCM_WAV_HEADER_DEFAULT(0, 16, 16000, 1);
+    size_t hdr_written = f.write((uint8_t *)&header, sizeof(header));
+    f.flush();
+    instance.unlockSPI();
+    Serial.printf("[Recorder] Task: WAV header write=%zu/%zu\n", hdr_written, sizeof(header));
+
+    // Open codec for recording (uses I2C/I2S, not SPI)
     int ret = instance.codec.open(16, 1, 16000);
+    Serial.printf("[Recorder] Task: codec.open() ret=%d\n", ret);
     if (ret < 0) {
         Serial.printf("Recorder: codec open failed: 0x%X\n", ret);
         instance.lockSPI();
@@ -632,18 +664,34 @@ static void recorderTask(void *args)
     }
 
     recorder_bytes_written = 0;
-    Serial.println("Recorder: started");
+    Serial.printf("Recorder: started, stack free=%u bytes\n",
+                  uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
 
     while (recorder_running) {
-        instance.codec.read(chunk, CHUNK_SIZE);
+        // Hold SPI lock during both codec.read() AND f.write().
+        // codec.read() uses I2S (not SPI) so this is safe — it just blocks
+        // display updates for ~16ms per chunk (512 bytes at 16kHz mono 16-bit).
         instance.lockSPI();
+        sd_deselect_all_spi();
+
+        instance.codec.read(chunk, CHUNK_SIZE);
+        if (!recorder_running) {
+            Serial.println("[Recorder] stopped during codec.read()");
+            instance.unlockSPI();
+            break;
+        }
+
         size_t written = f.write(chunk, CHUNK_SIZE);
         instance.unlockSPI();
+
         if (written != CHUNK_SIZE) {
-            Serial.println("Recorder: write error");
+            Serial.printf("[Recorder] write error: wrote %zu / %zu bytes\n", written, CHUNK_SIZE);
             break;
         }
         recorder_bytes_written += written;
+    }
+    if (!recorder_running) {
+        Serial.println("[Recorder] loop exited: recorder_running=false");
     }
 
     // Close codec
@@ -652,6 +700,7 @@ static void recorderTask(void *args)
     // Update WAV header with final size
     pcm_wav_header_t final_header = PCM_WAV_HEADER_DEFAULT(recorder_bytes_written, 16, 16000, 1);
     instance.lockSPI();
+    sd_deselect_all_spi();
     f.seek(0);
     f.write((uint8_t *)&final_header, sizeof(final_header));
     f.close();
@@ -688,7 +737,7 @@ bool hw_recorder_start(const char *filepath)
     recorder_running = true;
     recorder_bytes_written = 0;
 
-    BaseType_t result = xTaskCreate(recorderTask, "recorder", 4096, NULL, 5, &recTaskHandle);
+    BaseType_t result = xTaskCreate(recorderTask, "recorder", 8192, NULL, 5, &recTaskHandle);
     if (result != pdPASS) {
         recorder_running = false;
         return false;
@@ -703,6 +752,7 @@ void hw_recorder_stop()
 {
 #if defined(ARDUINO) && defined(USING_AUDIO_CODEC) && defined(HAS_SD_CARD_SOCKET)
     if (recorder_running) {
+        Serial.println("[Recorder] hw_recorder_stop() called!");
         recorder_running = false;
         // Wait for task to finish
         while (recTaskHandle != NULL) {
