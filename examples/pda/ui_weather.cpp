@@ -5,7 +5,9 @@
  * @copyright Copyright (c) 2025  ShenZhen XinYuan Electronic Technology Co., Ltd
  * @date      2025-04-01
  * @brief     Weather app using OpenWeatherMap One Call API 3.0.
- *            Main page shows current weather + navigation to hourly/daily sub-pages.
+ *            Single page, scrolling via:
+ *            - Encoder (scroll wheel): items in group, auto-scroll on focus
+ *            - Keyboard: Space+W/S direct scroll via lv_obj_scroll_by()
  *            Caches weather data for 1 hour.
  */
 #include "ui_define.h"
@@ -30,8 +32,10 @@ static lv_obj_t *menu = NULL;
 static lv_obj_t *quit_btn = NULL;
 static lv_timer_t *refresh_timer = NULL;
 static TaskHandle_t fetch_task = NULL;
+static lv_obj_t *main_page = NULL;
+static bool forecast_ui_built = false;
 
-// UI elements on main page
+// UI elements
 static lv_obj_t *city_label = NULL;
 static lv_obj_t *updated_label = NULL;
 static lv_obj_t *temp_label = NULL;
@@ -39,8 +43,6 @@ static lv_obj_t *detail_label = NULL;
 static lv_obj_t *desc_label = NULL;
 static lv_obj_t *status_label = NULL;
 static lv_obj_t *weather_icon = NULL;
-static lv_obj_t *hourly_table = NULL;
-static lv_obj_t *daily_table = NULL;
 
 // --- Data structures ---
 
@@ -57,7 +59,7 @@ struct current_weather_t {
 };
 
 struct hourly_entry_t {
-    char time_str[6];  // "HH:MM"
+    char time_str[6];
     char desc[24];
     float temp;
     int humidity;
@@ -66,7 +68,7 @@ struct hourly_entry_t {
 };
 
 struct daily_entry_t {
-    char day_str[6];   // "Mon" etc
+    char day_str[6];
     char desc[24];
     float temp_min;
     float temp_max;
@@ -110,6 +112,111 @@ static void capitalize(char *s)
     if (s && s[0] >= 'a' && s[0] <= 'z') s[0] -= 32;
 }
 
+// --- Keyboard callback for Space+key shortcuts ---
+// Scrolling is clamped to content bounds to prevent empty space.
+static void weather_keyboard_cb(int state, char &c)
+{
+    if (state != 1) return;
+
+    // Space+Q ('1') → back/quit
+    if (c == '1') {
+        if (menu) {
+            lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
+            if (back_btn) lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+        }
+        c = 0;
+        return;
+    }
+
+    if (!main_page) return;
+
+    int page_h = lv_obj_get_height(main_page);
+    if (page_h < 40) page_h = 200;
+    int top = lv_obj_get_scroll_top(main_page);
+    int bottom = lv_obj_get_scroll_bottom(main_page);
+    int dy = 0;
+
+    switch (c) {
+    case '2':  // Space+W → scroll up (content moves down)
+        dy = (top > 30) ? 30 : top;
+        break;
+    case '/':  // Space+S → scroll down (content moves up)
+        dy = (bottom > 30) ? -30 : -bottom;
+        break;
+    case '0':  // Space+P → page up
+        dy = (top > page_h - 20) ? (page_h - 20) : top;
+        break;
+    case ',':  // Space+N → page down
+        dy = (bottom > page_h - 20) ? -(page_h - 20) : -bottom;
+        break;
+    default:
+        return;
+    }
+
+    if (dy != 0) lv_obj_scroll_by(main_page, 0, dy, LV_ANIM_ON);
+    c = 0;
+}
+
+// --- Build forecast entries (called once when data arrives) ---
+
+static void build_forecast_ui()
+{
+    if (forecast_ui_built) return;
+    if (!data_valid || !main_page) return;
+
+    forecast_ui_built = true;
+    lv_group_t *g = lv_group_get_default();
+
+    // --- Section: 24-Hour Forecast ---
+    lv_obj_t *h_hdr = lv_menu_cont_create(main_page);
+    lv_obj_t *h_lbl = lv_label_create(h_hdr);
+    lv_label_set_text(h_lbl, "-- 24-Hour Forecast --");
+    lv_obj_set_style_text_color(h_lbl, lv_color_make(100, 200, 255), 0);
+    if (g) lv_group_add_obj(g, h_hdr);
+
+    // Column header: Time  Desc  Temp  Hum  Wind  Rain
+    lv_obj_t *hc = lv_menu_cont_create(main_page);
+    lv_obj_t *hcl = lv_label_create(hc);
+    lv_label_set_text(hcl, "Time  Wthr  Temp Hum  Wind Rain");
+    lv_obj_set_style_text_color(hcl, lv_color_make(180, 180, 180), 0);
+
+    for (int i = 0; i < hourly_count; i++) {
+        lv_obj_t *cont = lv_menu_cont_create(main_page);
+        lv_obj_t *label = lv_label_create(cont);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s %-5s %3.0f\xC2\xB0 %3d%% %4.1f %3d%%",
+                 hourly[i].time_str, hourly[i].desc, hourly[i].temp,
+                 hourly[i].humidity, hourly[i].wind, hourly[i].pop_pct);
+        lv_label_set_text(label, buf);
+    }
+
+    // --- Section: 8-Day Forecast ---
+    lv_obj_t *d_hdr = lv_menu_cont_create(main_page);
+    lv_obj_t *d_lbl = lv_label_create(d_hdr);
+    lv_label_set_text(d_lbl, "-- 8-Day Forecast --");
+    lv_obj_set_style_text_color(d_lbl, lv_color_make(100, 200, 255), 0);
+    if (g) lv_group_add_obj(g, d_hdr);
+
+    // Column header: Day  Desc  Lo/Hi  Hum  Wind  Rain
+    lv_obj_t *dc = lv_menu_cont_create(main_page);
+    lv_obj_t *dcl = lv_label_create(dc);
+    lv_label_set_text(dcl, "Day   Wthr  Lo/Hi Hum  Wind Rain");
+    lv_obj_set_style_text_color(dcl, lv_color_make(180, 180, 180), 0);
+
+    for (int i = 0; i < daily_count; i++) {
+        lv_obj_t *cont = lv_menu_cont_create(main_page);
+        lv_obj_t *label = lv_label_create(cont);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s %-5s %2.0f/%2.0f %3d%% %4.1f %3d%%",
+                 daily[i].day_str, daily[i].desc,
+                 daily[i].temp_min, daily[i].temp_max,
+                 daily[i].humidity, daily[i].wind, daily[i].pop_pct);
+        lv_label_set_text(label, buf);
+    }
+    printf("[Weather] forecast UI built: %d hourly + %d daily\n",
+           hourly_count, daily_count);
+}
+
 // --- UI update ---
 
 static void update_ui()
@@ -144,55 +251,7 @@ static void update_ui()
     if (status_label)
         lv_label_set_text(status_label, "");
 
-    // Hourly table
-    if (hourly_table && hourly_count > 0) {
-        lv_table_set_row_count(hourly_table, hourly_count + 1);
-        lv_table_set_column_count(hourly_table, 6);
-        lv_table_set_cell_value(hourly_table, 0, 0, "Time");
-        lv_table_set_cell_value(hourly_table, 0, 1, "Wthr");
-        lv_table_set_cell_value(hourly_table, 0, 2, "Temp");
-        lv_table_set_cell_value(hourly_table, 0, 3, "Hum");
-        lv_table_set_cell_value(hourly_table, 0, 4, "Wind");
-        lv_table_set_cell_value(hourly_table, 0, 5, "Rain");
-        for (int i = 0; i < hourly_count; i++) {
-            char buf[16];
-            lv_table_set_cell_value(hourly_table, i + 1, 0, hourly[i].time_str);
-            lv_table_set_cell_value(hourly_table, i + 1, 1, hourly[i].desc);
-            snprintf(buf, sizeof(buf), "%.0f", hourly[i].temp);
-            lv_table_set_cell_value(hourly_table, i + 1, 2, buf);
-            snprintf(buf, sizeof(buf), "%d%%", hourly[i].humidity);
-            lv_table_set_cell_value(hourly_table, i + 1, 3, buf);
-            snprintf(buf, sizeof(buf), "%.1f", hourly[i].wind);
-            lv_table_set_cell_value(hourly_table, i + 1, 4, buf);
-            snprintf(buf, sizeof(buf), "%d%%", hourly[i].pop_pct);
-            lv_table_set_cell_value(hourly_table, i + 1, 5, buf);
-        }
-    }
-
-    // Daily table
-    if (daily_table && daily_count > 0) {
-        lv_table_set_row_count(daily_table, daily_count + 1);
-        lv_table_set_column_count(daily_table, 6);
-        lv_table_set_cell_value(daily_table, 0, 0, "Day");
-        lv_table_set_cell_value(daily_table, 0, 1, "Wthr");
-        lv_table_set_cell_value(daily_table, 0, 2, "Lo/Hi");
-        lv_table_set_cell_value(daily_table, 0, 3, "Hum");
-        lv_table_set_cell_value(daily_table, 0, 4, "Wind");
-        lv_table_set_cell_value(daily_table, 0, 5, "Rain");
-        for (int i = 0; i < daily_count; i++) {
-            char buf[16];
-            lv_table_set_cell_value(daily_table, i + 1, 0, daily[i].day_str);
-            lv_table_set_cell_value(daily_table, i + 1, 1, daily[i].desc);
-            snprintf(buf, sizeof(buf), "%.0f/%.0f", daily[i].temp_min, daily[i].temp_max);
-            lv_table_set_cell_value(daily_table, i + 1, 2, buf);
-            snprintf(buf, sizeof(buf), "%d%%", daily[i].humidity);
-            lv_table_set_cell_value(daily_table, i + 1, 3, buf);
-            snprintf(buf, sizeof(buf), "%.1f", daily[i].wind);
-            lv_table_set_cell_value(daily_table, i + 1, 4, buf);
-            snprintf(buf, sizeof(buf), "%d%%", daily[i].pop_pct);
-            lv_table_set_cell_value(daily_table, i + 1, 5, buf);
-        }
-    }
+    build_forecast_ui();
 }
 
 #ifdef ARDUINO
@@ -207,7 +266,6 @@ static void parse_onecall(const char *json)
 
     const char *day_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
-    // --- Current weather ---
     cJSON *current = cJSON_GetObjectItem(root, "current");
     if (current) {
         cJSON *t = cJSON_GetObjectItem(current, "temp");
@@ -237,7 +295,6 @@ static void parse_onecall(const char *json)
         data_valid = true;
     }
 
-    // --- Hourly forecast (up to 24 entries) ---
     cJSON *hourly_arr = cJSON_GetObjectItem(root, "hourly");
     if (hourly_arr) {
         int count = cJSON_GetArraySize(hourly_arr);
@@ -276,7 +333,6 @@ static void parse_onecall(const char *json)
         }
     }
 
-    // --- Daily forecast (up to 8 days) ---
     cJSON *daily_arr = cJSON_GetObjectItem(root, "daily");
     if (daily_arr) {
         int count = cJSON_GetArraySize(daily_arr);
@@ -386,7 +442,7 @@ static bool cache_is_fresh()
     if (!data_valid || last_fetch_time == 0) return false;
     uint32_t now = millis();
     if (now < last_fetch_time) return false;
-    return (now - last_fetch_time) < 3600000UL;  // 1 hour
+    return (now - last_fetch_time) < 3600000UL;
 }
 
 static void weather_fetch_task(void *param)
@@ -499,12 +555,14 @@ static void back_event_handler(lv_event_t *e)
         if (refresh_timer) { lv_timer_del(refresh_timer); refresh_timer = NULL; }
 #ifdef ARDUINO
         if (fetch_task) { vTaskDelete(fetch_task); fetch_task = NULL; }
+        hw_set_keyboard_read_callback(NULL);
 #endif
+
         lv_obj_clean(menu);
         lv_obj_del(menu);
         menu = NULL;
-        hourly_table = NULL;
-        daily_table = NULL;
+        main_page = NULL;
+        forecast_ui_built = false;
         city_label = NULL;
         updated_label = NULL;
         temp_label = NULL;
@@ -517,41 +575,22 @@ static void back_event_handler(lv_event_t *e)
     }
 }
 
-// --- Table setup ---
-
-static void setup_table(lv_obj_t *table, int total_w)
-{
-    lv_table_set_column_count(table, 6);
-    lv_table_set_column_width(table, 0, total_w * 16 / 100);
-    lv_table_set_column_width(table, 1, total_w * 22 / 100);
-    lv_table_set_column_width(table, 2, total_w * 18 / 100);
-    lv_table_set_column_width(table, 3, total_w * 14 / 100);
-    lv_table_set_column_width(table, 4, total_w * 16 / 100);
-    lv_table_set_column_width(table, 5, total_w * 14 / 100);
-
-    lv_obj_set_style_pad_top(table, 2, LV_PART_ITEMS);
-    lv_obj_set_style_pad_bottom(table, 2, LV_PART_ITEMS);
-    lv_obj_set_style_pad_left(table, 3, LV_PART_ITEMS);
-    lv_obj_set_style_pad_right(table, 2, LV_PART_ITEMS);
-    lv_obj_set_style_border_width(table, 1, LV_PART_ITEMS);
-    lv_obj_set_style_border_color(table, lv_color_make(60, 60, 60), LV_PART_ITEMS);
-}
-
 // --- Main entry ---
 
 void ui_weather_enter(lv_obj_t *parent)
 {
     menu = create_menu(parent, back_event_handler);
+    forecast_ui_built = false;
 
-    int disp_w = lv_disp_get_hor_res(NULL);
-    int table_w = disp_w - 20;
+    // Ensure keyboard indev is enabled (may have been disabled by keyboard app)
+    enable_keyboard();
 
     lv_group_t *g = lv_group_get_default();
 
-    // === Main page: current weather + navigation items ===
-    lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
+    // Single scrollable page - all content here
+    main_page = lv_menu_page_create(menu, NULL);
 
-    // --- Current weather section (non-interactive container) ---
+    // --- Current weather section ---
     lv_obj_t *cur_cont = lv_menu_cont_create(main_page);
     lv_obj_set_flex_flow(cur_cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(cur_cont, 4, LV_PART_MAIN);
@@ -591,62 +630,31 @@ void ui_weather_enter(lv_obj_t *parent)
     lv_obj_set_style_text_color(temp_label, lv_color_make(255, 200, 50), LV_PART_MAIN);
     lv_label_set_text(temp_label, "-- C");
 
-    // Description
     desc_label = lv_label_create(cur_cont);
     lv_obj_set_style_text_color(desc_label, lv_color_make(180, 220, 255), LV_PART_MAIN);
     lv_label_set_text(desc_label, "");
 
-    // Details
     detail_label = lv_label_create(cur_cont);
     lv_label_set_text(detail_label, "");
     lv_obj_set_width(detail_label, lv_pct(100));
 
-    // Status
     status_label = lv_label_create(cur_cont);
     lv_obj_set_width(status_label, lv_pct(100));
     lv_obj_set_style_text_color(status_label, lv_color_make(200, 200, 200), LV_PART_MAIN);
     lv_label_set_text(status_label, "");
 
-    // --- Navigation items (clickable, focusable) ---
+    // Add cur_cont to group for encoder navigation
+    if (g) lv_group_add_obj(g, cur_cont);
 
-    // "24-Hour Forecast" entry
-    lv_obj_t *hourly_cont = lv_menu_cont_create(main_page);
-    lv_obj_t *hl = lv_label_create(hourly_cont);
-    lv_label_set_text(hl, LV_SYMBOL_LIST " 24-Hour Forecast");
+    // Forecast section headers are added to group by build_forecast_ui()
+    // when data arrives. Encoder navigates between 3 sections (cur, hourly, daily).
 
-    // "8-Day Forecast" entry
-    lv_obj_t *daily_cont = lv_menu_cont_create(main_page);
-    lv_obj_t *dl = lv_label_create(daily_cont);
-    lv_label_set_text(dl, LV_SYMBOL_LIST " 8-Day Forecast");
-
-    // === Hourly sub-page ===
-    lv_obj_t *hourly_page = lv_menu_page_create(menu, NULL);
-    hourly_table = lv_table_create(hourly_page);
-    lv_obj_set_width(hourly_table, lv_pct(100));
-    setup_table(hourly_table, table_w);
-    lv_table_set_row_count(hourly_table, 1);
-    lv_table_set_cell_value(hourly_table, 0, 0, "Loading...");
-
-    // === Daily sub-page ===
-    lv_obj_t *daily_page = lv_menu_page_create(menu, NULL);
-    daily_table = lv_table_create(daily_page);
-    lv_obj_set_width(daily_table, lv_pct(100));
-    setup_table(daily_table, table_w);
-    lv_table_set_row_count(daily_table, 1);
-    lv_table_set_cell_value(daily_table, 0, 0, "Loading...");
-
-    // Link navigation: clicking cont opens sub-page
-    lv_menu_set_load_page_event(menu, hourly_cont, hourly_page);
-    lv_menu_set_load_page_event(menu, daily_cont, daily_page);
-
-    // Add clickable items to focus group for encoder/keyboard navigation
-    lv_group_add_obj(g, hourly_cont);
-    lv_group_add_obj(g, daily_cont);
-
-    // Set main page as active
     lv_menu_set_page(menu, main_page);
 
 #ifdef ARDUINO
+    // Register keyboard callback for Space+key scroll shortcuts
+    hw_set_keyboard_read_callback(weather_keyboard_cb);
+
     load_cache();
     if (data_valid) update_ui();
 #endif
