@@ -69,16 +69,6 @@ static void rec_btn_event(lv_event_t *e)
     if (code != LV_EVENT_CLICKED) return;
 
     if (!is_recording) {
-#ifdef RECORDER_ENABLED
-        if (!(HW_CODEC_ONLINE & hw_get_device_online())) {
-            lv_label_set_text(status_label, "No audio hardware");
-            return;
-        }
-        if (!(HW_SD_ONLINE & hw_get_device_online())) {
-            lv_label_set_text(status_label, "No SD card");
-            return;
-        }
-#endif
         char filename[64];
         generate_filename(filename, sizeof(filename));
 
@@ -142,7 +132,7 @@ static void scan_recordings()
     rec_files.clear();
 #if defined(ARDUINO) && defined(HAS_SD_CARD_SOCKET)
     instance.lockSPI();
-    instance.installSD();
+    hw_sd_begin();
     File dir = SD.open("/recordings");
     if (dir && dir.isDirectory()) {
         File f = dir.openNextFile();
@@ -166,7 +156,7 @@ static void ensure_recordings_dir()
 {
 #if defined(ARDUINO) && defined(HAS_SD_CARD_SOCKET)
     instance.lockSPI();
-    instance.installSD();
+    hw_sd_begin();
     if (!SD.exists("/recordings")) {
         SD.mkdir("/recordings");
     }
@@ -252,6 +242,31 @@ void ui_recorder_enter(lv_obj_t *parent)
     lv_menu_set_page(menu, main_page);
     return;
 #else
+    // Check audio codec
+    if (!(HW_CODEC_ONLINE & hw_get_device_online())) {
+        lv_obj_t *label = lv_label_create(main_page);
+        lv_label_set_text(label, "No audio hardware");
+        lv_obj_set_width(label, lv_pct(100));
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_menu_set_page(menu, main_page);
+        return;
+    }
+
+    // Check SD card
+    Serial.println("[Recorder] Checking SD card on entry...");
+    bool sd_ok = hw_mount_sd();
+    Serial.printf("[Recorder] hw_mount_sd() returned: %d\n", sd_ok);
+    if (!sd_ok) {
+        Serial.println("[Recorder] SD card mount failed on entry");
+        lv_obj_t *label = lv_label_create(main_page);
+        lv_label_set_text(label, "No SD card detected");
+        lv_obj_set_width(label, lv_pct(100));
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_menu_set_page(menu, main_page);
+        return;
+    }
+    Serial.println("[Recorder] SD card OK");
+
     ensure_recordings_dir();
 
     // Control row

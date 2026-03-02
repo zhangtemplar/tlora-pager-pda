@@ -10,6 +10,9 @@
 #include <math.h>
 #include <lvgl.h>
 
+#ifdef ARDUINO
+#include "driver/gpio.h"
+#endif
 
 #define NVS_NAME    "pager"
 static user_setting_params_t user_setting;
@@ -64,6 +67,51 @@ static bool                  pps_trigger = false;
 BleKeyboard bleKeyboard;
 #endif
 
+#endif
+
+#if defined(ARDUINO) && defined(HAS_SD_CARD_SOCKET)
+/**
+ * Mount SD card — bypasses library's installSD() which has an
+ * unreliable card-detect pin. Caller MUST hold the SPI lock.
+ */
+static bool sd_mounted = false;
+
+bool hw_sd_begin()
+{
+    // Skip re-init if already mounted
+    if (sd_mounted && SD.cardType() != CARD_NONE) {
+        return true;
+    }
+
+    // Enable SD card power
+    instance.io.pinMode(EXPANDS_SD_EN, OUTPUT);
+    instance.io.digitalWrite(EXPANDS_SD_EN, HIGH);
+
+    // Enable external pull-ups on SD data lines
+    instance.io.pinMode(EXPANDS_SD_PULLEN, OUTPUT);
+    instance.io.digitalWrite(EXPANDS_SD_PULLEN, HIGH);
+
+    // Enable internal pull-up on MISO (GPIO 33) — the display controller
+    // shares the SPI bus and weakly pulls MISO LOW when deselected.
+    gpio_pullup_en((gpio_num_t)MISO);
+    gpio_pulldown_dis((gpio_num_t)MISO);
+
+    if (!SD.begin(SD_CS, SPI, 4000000U, "/sd")) {
+        Serial.println("[SD] SD.begin() FAILED");
+        sd_mounted = false;
+        return false;
+    }
+    if (SD.cardType() == CARD_NONE) {
+        Serial.println("[SD] cardType is CARD_NONE");
+        sd_mounted = false;
+        return false;
+    }
+    Serial.printf("[SD] OK, cardType=%d, size=%llu MB\n", SD.cardType(), SD.cardSize() / (1024 * 1024));
+    sd_mounted = true;
+    return true;
+}
+#else
+bool hw_sd_begin() { return false; }
 #endif
 
 static device_const_var_t dev_conts_var = {
@@ -550,7 +598,7 @@ static void recorderTask(void *args)
 
     // Open file and write WAV header placeholder
     instance.lockSPI();
-    instance.installSD();
+    hw_sd_begin();
     File f = SD.open(recorder_filepath, FILE_WRITE);
     instance.unlockSPI();
 
@@ -625,13 +673,18 @@ bool hw_recorder_start(const char *filepath)
         return false;
     }
     if (!(HW_CODEC_ONLINE & hw_get_device_online())) {
+        Serial.println("[Recorder] No audio codec");
         return false;
     }
-    if (!(HW_SD_ONLINE & hw_get_device_online())) {
+
+    // Try mounting SD directly instead of relying on boot-time flag
+    if (!hw_mount_sd()) {
+        Serial.println("[Recorder] SD mount failed");
         return false;
     }
 
     recorder_filepath = String("/") + String(filepath);
+    Serial.printf("[Recorder] Starting recording to: %s\n", recorder_filepath.c_str());
     recorder_running = true;
     recorder_bytes_written = 0;
 
@@ -1410,8 +1463,10 @@ void hw_fat_list(vector < AudioParams_t > &list, const char *dirname, uint8_t le
 bool hw_sd_list(vector < AudioParams_t > &list, const char *dirname, uint8_t levels)
 {
 #if defined(ARDUINO) && defined(HAS_SD_CARD_SOCKET)
+    Serial.println("[SD Music] Attempting SD mount...");
     instance.lockSPI();
-    if (instance.installSD()) {
+    bool sd_ok = hw_sd_begin();
+    if (sd_ok) {
         Serial.println("SD Card mount success.");
     } else {
         Serial.println("SD Card mount failed.");
@@ -1424,10 +1479,15 @@ bool hw_sd_list(vector < AudioParams_t > &list, const char *dirname, uint8_t lev
     return true;
 }
 
-void hw_mount_sd()
+bool hw_mount_sd()
 {
 #if defined(ARDUINO) && defined(HAS_SD_CARD_SOCKET)
-    instance.installSD();
+    instance.lockSPI();
+    bool ok = hw_sd_begin();
+    instance.unlockSPI();
+    return ok;
+#else
+    return false;
 #endif
 }
 

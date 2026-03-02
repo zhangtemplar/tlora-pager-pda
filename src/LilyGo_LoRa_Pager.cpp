@@ -460,13 +460,12 @@ bool LilyGoLoRaPager::initPMU()
  */
 bool LilyGoLoRaPager::installSD()
 {
+    Serial.println("[SD] installSD() called");
 
 #ifdef EXPANDS_SD_DET
     io.pinMode(EXPANDS_SD_DET, INPUT);
-    if (io.digitalRead(EXPANDS_SD_DET)) {
-        log_d("SD card detect pin indicates no card inserted");
-        return false;
-    }
+    int det = io.digitalRead(EXPANDS_SD_DET);
+    Serial.printf("[SD] EXPANDS_SD_DET pin = %d (1=no card)\n", det);
 #endif /*EXPANDS_SD_DET*/
 
     initShareSPIPins();
@@ -477,15 +476,19 @@ bool LilyGoLoRaPager::installSD()
     gpio_pullup_en((gpio_num_t)MISO);
     gpio_pulldown_dis((gpio_num_t)MISO);
 
+    Serial.printf("[SD] MISO=%d, SD_CS=%d, calling SD.begin()\n", MISO, SD_CS);
+
     // Set mount point to /sd
     if (!SD.begin(SD_CS, SPI, 4000000U, "/sd")) {
-        log_e("Failed to detect SD Card!!");
+        Serial.println("[SD] SD.begin() FAILED");
         return false;
     }
+    Serial.printf("[SD] SD.begin() OK, cardType=%d\n", SD.cardType());
     if (SD.cardType() != CARD_NONE) {
-        log_d("SD Card Size: %llu MB\n", SD.cardSize() / (1024 * 1024));
+        Serial.printf("[SD] SD Card Size: %llu MB\n", SD.cardSize() / (1024 * 1024));
         return true;
     }
+    Serial.println("[SD] cardType is CARD_NONE");
     return false;
 }
 

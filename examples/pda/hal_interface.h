@@ -579,9 +579,19 @@ void hw_set_radio_tx(radio_tx_params_t &params, bool continuous = true);
 void hw_get_radio_rx(radio_rx_params_t &params);
 
 /**
- * @brief Mount the SD card.
+ * @brief Mount the SD card (low-level, no locking).
+ *        Applies MISO pull-up fix and calls SD.begin().
+ * @retval Returns true if SD card is mounted and ready, false otherwise.
+ * @note   Caller MUST hold the SPI lock before calling this.
  */
-void hw_mount_sd();
+bool hw_sd_begin();
+
+/**
+ * @brief Mount the SD card (high-level, with locking).
+ * @retval Returns true if SD card is mounted and ready, false otherwise.
+ * @note   Acquires the SPI lock internally; caller must NOT hold it.
+ */
+bool hw_mount_sd();
 
 /**
  * @brief Get the list of music files from the SD card.

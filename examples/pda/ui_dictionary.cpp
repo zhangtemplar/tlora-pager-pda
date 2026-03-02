@@ -26,6 +26,7 @@ static void do_search()
     const char *word = lv_textarea_get_text(search_ta);
     if (!word || word[0] == '\0') return;
 
+    Serial.printf("[Dictionary] Searching for: \"%s\"\n", word);
     lv_label_set_text(status_label, "Searching...");
 
     dict_result_t result;
@@ -102,20 +103,8 @@ static void ta_event_cb(lv_event_t *e)
     if (code == LV_EVENT_KEY) {
         lv_key_t key = *(lv_key_t *)lv_event_get_param(e);
         if (key == LV_KEY_ENTER) {
-            lv_textarea_delete_char(ta);
             do_search();
             lv_event_stop_processing(e);
-        }
-    }
-
-    if (lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
-        if (code == LV_EVENT_KEY) {
-            lv_key_t key = *(lv_key_t *)lv_event_get_param(e);
-            if (key == LV_KEY_ENTER) {
-                lv_textarea_delete_char(ta);
-                do_search();
-                lv_event_stop_processing(e);
-            }
         }
     }
 }

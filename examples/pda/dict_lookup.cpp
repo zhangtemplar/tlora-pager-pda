@@ -20,6 +20,7 @@
 #ifdef ARDUINO
 #include <SD.h>
 #include <cJSON.h>
+#include <LilyGoLib.h>
 
 // ---- Multi-StarDict support ----
 
@@ -52,8 +53,27 @@ int dict_scan_stardict()
     stardict_scanned = true;
     stardict_count = 0;
 
+    instance.lockSPI();
+    bool sd_ok = hw_sd_begin();
+    Serial.printf("[Dictionary] installSD() returned: %d\n", sd_ok);
+    if (!sd_ok) {
+        Serial.println("[Dictionary] SD card mount failed");
+        instance.unlockSPI();
+        return 0;
+    }
+    Serial.println("[Dictionary] SD card mount success");
+
+    if (!SD.exists("/stardict")) {
+        Serial.println("[Dictionary] Creating /stardict/ directory");
+        SD.mkdir("/stardict");
+    }
+
     File dir = SD.open("/stardict");
-    if (!dir || !dir.isDirectory()) return 0;
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("[Dictionary] Failed to open /stardict/ directory");
+        instance.unlockSPI();
+        return 0;
+    }
 
     File entry;
     while ((entry = dir.openNextFile()) && stardict_count < MAX_STARDICT_DICTS) {
@@ -86,6 +106,7 @@ int dict_scan_stardict()
     }
     dir.close();
 
+    instance.unlockSPI();
     return stardict_count;
 }
 
@@ -184,8 +205,12 @@ bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t
     dict_scan_stardict();
     if (dict_index < 0 || dict_index >= stardict_count) return false;
 
+    instance.lockSPI();
+    hw_sd_begin();
     dict_info_t &d = stardict_dicts[dict_index];
     bool found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+    instance.unlockSPI();
+
     if (found) {
         // Prepend dictionary name to definition
         string prefix = "[" + string(d.name.c_str()) + "]\n";
@@ -199,15 +224,21 @@ bool dict_lookup_stardict_all(const char *word, dict_result_t &result)
     result.found = false;
     dict_scan_stardict();
 
+    if (stardict_count == 0) return false;
+
+    instance.lockSPI();
+    hw_sd_begin();
     for (int i = 0; i < stardict_count; i++) {
         dict_info_t &d = stardict_dicts[i];
         if (stardict_lookup_in(d.idx_path, d.dict_path, word, result)) {
+            instance.unlockSPI();
             // Prepend dictionary name to definition
             string prefix = "[" + string(d.name.c_str()) + "]\n";
             result.definition = prefix + result.definition;
             return true;
         }
     }
+    instance.unlockSPI();
     return false;
 }
 
@@ -279,16 +310,36 @@ bool dict_lookup_online(const char *word, dict_result_t &result)
 
 bool dict_offline_en_available()
 {
-    return SD.exists("/dict_en.idx") && SD.exists("/dict_en.dat");
+    instance.lockSPI();
+    bool sd_ok = hw_sd_begin();
+    Serial.printf("[Dictionary] offline_en_available: installSD()=%d\n", sd_ok);
+    if (!sd_ok) {
+        instance.unlockSPI();
+        return false;
+    }
+    bool exists = SD.exists("/dict_en.idx") && SD.exists("/dict_en.dat");
+    Serial.printf("[Dictionary] dict_en files exist: %d\n", exists);
+    instance.unlockSPI();
+    return exists;
 }
 
 bool dict_lookup_offline_en(const char *word, dict_result_t &result)
 {
     result.found = false;
-    if (!dict_offline_en_available()) return false;
+
+    instance.lockSPI();
+    hw_sd_begin();
+
+    if (!SD.exists("/dict_en.idx") || !SD.exists("/dict_en.dat")) {
+        instance.unlockSPI();
+        return false;
+    }
 
     File idx_file = SD.open("/dict_en.idx", FILE_READ);
-    if (!idx_file) return false;
+    if (!idx_file) {
+        instance.unlockSPI();
+        return false;
+    }
 
     // Binary search in index file
     // Index format: word\0 + 4-byte offset (big-endian) + 2-byte length (big-endian)
@@ -350,19 +401,31 @@ bool dict_lookup_offline_en(const char *word, dict_result_t &result)
 
     idx_file.close();
 
-    if (!found) return false;
+    if (!found) {
+        instance.unlockSPI();
+        return false;
+    }
 
     // Read definition from data file
     File dat_file = SD.open("/dict_en.dat", FILE_READ);
-    if (!dat_file) return false;
+    if (!dat_file) {
+        instance.unlockSPI();
+        return false;
+    }
 
     dat_file.seek(data_offset);
     char *def_buf = (char *)malloc(data_len + 1);
-    if (!def_buf) { dat_file.close(); return false; }
+    if (!def_buf) {
+        dat_file.close();
+        instance.unlockSPI();
+        return false;
+    }
 
     dat_file.read((uint8_t *)def_buf, data_len);
     def_buf[data_len] = '\0';
     dat_file.close();
+
+    instance.unlockSPI();
 
     result.word = word;
     result.definition = def_buf;
