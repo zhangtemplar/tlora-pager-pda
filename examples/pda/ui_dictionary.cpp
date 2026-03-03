@@ -28,6 +28,7 @@ static void do_search()
 
     Serial.printf("[Dictionary] Searching for: \"%s\"\n", word);
     lv_label_set_text(status_label, "Searching...");
+    lv_refr_now(NULL);
 
     dict_result_t result;
     bool found = false;
@@ -47,6 +48,24 @@ static void do_search()
     // Try custom binary format
     if (!found && dict_offline_en_available()) {
         found = dict_lookup_offline_en(word, result);
+    }
+
+    // If offline exact match failed, try prefix search for suggestions
+    if (!found) {
+        const char *suggestions[MAX_SUGGESTIONS];
+        int dict_idx = (selected_dict == 0) ? -1 : (selected_dict - 1);
+        int n = dict_prefix_search(word, suggestions, MAX_SUGGESTIONS, dict_idx);
+        if (n > 0) {
+            static char suggest_buf[1024];
+            int pos = snprintf(suggest_buf, sizeof(suggest_buf), "Did you mean:\n");
+            for (int i = 0; i < n && pos < (int)sizeof(suggest_buf) - 1; i++) {
+                pos += snprintf(suggest_buf + pos, sizeof(suggest_buf) - pos,
+                                "  %s\n", suggestions[i]);
+            }
+            lv_label_set_text(result_label, suggest_buf);
+            lv_label_set_text(status_label, "");
+            return;
+        }
     }
 
     // Try online if offline not found or not available
@@ -127,7 +146,7 @@ void ui_dictionary_enter(lv_obj_t *parent)
     lv_obj_t *main_page = lv_menu_page_create(menu, NULL);
 
     lv_obj_t *cont = lv_obj_create(main_page);
-    lv_obj_set_size(cont, lv_pct(100), lv_pct(100));
+    lv_obj_set_size(cont, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cont, 5, LV_PART_MAIN);
@@ -136,10 +155,21 @@ void ui_dictionary_enter(lv_obj_t *parent)
     // Scan for dictionaries
     int sd_count = dict_scan_stardict();
 
+    // Search row: dropdown (if multiple dicts) + search textarea on the same row
+    lv_obj_t *search_row = lv_obj_create(cont);
+    lv_obj_set_size(search_row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(search_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(search_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(search_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(search_row, 5, LV_PART_MAIN);
+    lv_obj_set_flex_flow(search_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(search_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_remove_flag(search_row, LV_OBJ_FLAG_SCROLLABLE);
+
     // Dictionary selection dropdown (only show if multiple dicts available)
     if (sd_count > 1) {
-        dict_dropdown = lv_dropdown_create(cont);
-        lv_obj_set_width(dict_dropdown, lv_pct(100));
+        dict_dropdown = lv_dropdown_create(search_row);
+        lv_obj_set_width(dict_dropdown, lv_pct(40));
 
         // Build options string: "All Dictionaries\nDict1\nDict2\n..."
         static char dd_options[512];
@@ -161,9 +191,9 @@ void ui_dictionary_enter(lv_obj_t *parent)
     }
 
     // Search textarea
-    search_ta = lv_textarea_create(cont);
-    lv_obj_set_width(search_ta, lv_pct(100));
+    search_ta = lv_textarea_create(search_row);
     lv_obj_set_height(search_ta, 40);
+    lv_obj_set_flex_grow(search_ta, 1);
     lv_textarea_set_placeholder_text(search_ta, "Type a word and press Enter");
     lv_textarea_set_one_line(search_ta, true);
     lv_textarea_set_max_length(search_ta, 64);

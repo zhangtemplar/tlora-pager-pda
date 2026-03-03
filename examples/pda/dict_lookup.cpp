@@ -28,6 +28,19 @@ static dict_info_t stardict_dicts[MAX_STARDICT_DICTS];
 static int stardict_count = 0;
 static bool stardict_scanned = false;
 
+// PSRAM-cached index for fast binary search
+struct idx_entry_t {
+    const char *word;     // pointer into psram_idx_data buffer
+    uint32_t offset;      // offset in .dict file
+    uint32_t size;        // size in .dict file
+};
+
+static uint8_t *psram_idx_data[MAX_STARDICT_DICTS] = {};
+static idx_entry_t *psram_idx_entries[MAX_STARDICT_DICTS] = {};
+static uint32_t psram_idx_count[MAX_STARDICT_DICTS] = {};
+
+#define MAX_IDX_FILE_SIZE  (4 * 1024 * 1024)  // 4MB cap per index
+
 static void parse_ifo_bookname(const char *ifo_path, String &bookname)
 {
     File f = SD.open(ifo_path, FILE_READ);
@@ -128,6 +141,159 @@ const char *dict_get_stardict_name(int index)
     return stardict_dicts[index].name.c_str();
 }
 
+// Compare function for qsort/bsearch on idx_entry_t
+static int idx_entry_cmp(const void *a, const void *b)
+{
+    return strcasecmp(((const idx_entry_t *)a)->word, ((const idx_entry_t *)b)->word);
+}
+
+// Load a StarDict .idx file into PSRAM for fast binary search.
+// Must be called while SPI lock is held and SD is mounted.
+static bool load_stardict_index(int dict_index)
+{
+    if (dict_index < 0 || dict_index >= stardict_count) return false;
+    if (psram_idx_entries[dict_index]) return true;  // already loaded
+
+    const char *idx_path = stardict_dicts[dict_index].idx_path.c_str();
+    Serial.printf("[Dict] Loading index: %s\n", idx_path);
+
+    File idx_file = SD.open(idx_path, FILE_READ);
+    if (!idx_file) {
+        Serial.println("[Dict] Failed to open idx file");
+        return false;
+    }
+
+    size_t idx_size = idx_file.size();
+    if (idx_size == 0 || idx_size > MAX_IDX_FILE_SIZE) {
+        Serial.printf("[Dict] Index file too large or empty: %u bytes\n", (unsigned)idx_size);
+        idx_file.close();
+        return false;
+    }
+
+    // Allocate PSRAM for raw index data (+1 for safety null terminator)
+    uint8_t *raw = (uint8_t *)ps_malloc(idx_size + 1);
+    if (!raw) {
+        Serial.println("[Dict] ps_malloc failed for index data");
+        idx_file.close();
+        return false;
+    }
+
+    // Read in 4KB blocks (much faster than byte-by-byte SPI)
+    size_t total_read = 0;
+    while (total_read < idx_size) {
+        size_t chunk = idx_size - total_read;
+        if (chunk > 4096) chunk = 4096;
+        size_t n = idx_file.read(raw + total_read, chunk);
+        if (n == 0) break;
+        total_read += n;
+    }
+    idx_file.close();
+    raw[total_read] = '\0';
+
+    if (total_read != idx_size) {
+        Serial.printf("[Dict] Partial read: %u / %u bytes\n", (unsigned)total_read, (unsigned)idx_size);
+        free(raw);
+        return false;
+    }
+
+    // First pass: count entries
+    uint32_t count = 0;
+    size_t pos = 0;
+    while (pos < idx_size) {
+        // Skip word string until null terminator
+        while (pos < idx_size && raw[pos] != '\0') pos++;
+        pos++;  // skip null terminator
+        if (pos + 8 > idx_size) break;  // need 8 bytes for offset+size
+        pos += 8;
+        count++;
+    }
+
+    if (count == 0) {
+        Serial.println("[Dict] No entries found in index");
+        free(raw);
+        return false;
+    }
+
+    // Allocate entry array in PSRAM
+    idx_entry_t *entries = (idx_entry_t *)ps_malloc(count * sizeof(idx_entry_t));
+    if (!entries) {
+        Serial.println("[Dict] ps_malloc failed for entry array");
+        free(raw);
+        return false;
+    }
+
+    // Second pass: populate entries
+    pos = 0;
+    uint32_t idx = 0;
+    while (pos < idx_size && idx < count) {
+        const char *word_ptr = (const char *)(raw + pos);
+        // Skip word string until null terminator
+        while (pos < idx_size && raw[pos] != '\0') pos++;
+        pos++;  // skip null terminator
+        if (pos + 8 > idx_size) break;
+
+        uint32_t data_offset = ((uint32_t)raw[pos] << 24) | ((uint32_t)raw[pos + 1] << 16) |
+                               ((uint32_t)raw[pos + 2] << 8) | raw[pos + 3];
+        uint32_t data_size = ((uint32_t)raw[pos + 4] << 24) | ((uint32_t)raw[pos + 5] << 16) |
+                             ((uint32_t)raw[pos + 6] << 8) | raw[pos + 7];
+        pos += 8;
+
+        entries[idx].word = word_ptr;
+        entries[idx].offset = data_offset;
+        entries[idx].size = data_size;
+        idx++;
+    }
+
+    // Sort by word (case-insensitive) for binary search
+    qsort(entries, idx, sizeof(idx_entry_t), idx_entry_cmp);
+
+    psram_idx_data[dict_index] = raw;
+    psram_idx_entries[dict_index] = entries;
+    psram_idx_count[dict_index] = idx;
+
+    Serial.printf("[Dict] Index loaded: %u entries (%.1f KB data + %.1f KB entries)\n",
+                  (unsigned)idx, idx_size / 1024.0, (idx * sizeof(idx_entry_t)) / 1024.0);
+    return true;
+}
+
+// Binary search lookup using PSRAM-cached index.
+// SPI lock must be held; reads definition from .dict file on SD.
+static bool stardict_lookup_psram(int dict_index, const char *word, dict_result_t &result)
+{
+    result.found = false;
+    if (!psram_idx_entries[dict_index] || psram_idx_count[dict_index] == 0)
+        return false;
+
+    idx_entry_t key;
+    key.word = word;
+    idx_entry_t *found = (idx_entry_t *)bsearch(&key, psram_idx_entries[dict_index],
+                                                  psram_idx_count[dict_index],
+                                                  sizeof(idx_entry_t), idx_entry_cmp);
+    if (!found) return false;
+
+    // Read definition from .dict file
+    const char *dict_path = stardict_dicts[dict_index].dict_path.c_str();
+    File dict_file = SD.open(dict_path, FILE_READ);
+    if (!dict_file) return false;
+
+    uint32_t data_size = found->size;
+    if (data_size > 4096) data_size = 4096;
+
+    dict_file.seek(found->offset);
+    char *def_buf = (char *)malloc(data_size + 1);
+    if (!def_buf) { dict_file.close(); return false; }
+
+    dict_file.read((uint8_t *)def_buf, data_size);
+    def_buf[data_size] = '\0';
+    dict_file.close();
+
+    result.word = found->word;
+    result.definition = def_buf;
+    result.found = true;
+    free(def_buf);
+    return true;
+}
+
 // Look up in a single StarDict dictionary by its paths
 static bool stardict_lookup_in(const String &idx_path, const String &dict_path,
                                const char *word, dict_result_t &result)
@@ -207,8 +373,21 @@ bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t
 
     instance.lockSPI();
     hw_sd_begin();
+
+    // Lazy-load PSRAM index on first lookup
+    if (!psram_idx_entries[dict_index]) {
+        load_stardict_index(dict_index);
+    }
+
+    bool found;
     dict_info_t &d = stardict_dicts[dict_index];
-    bool found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+    if (psram_idx_entries[dict_index]) {
+        // Fast path: binary search in PSRAM
+        found = stardict_lookup_psram(dict_index, word, result);
+    } else {
+        // Fallback: original linear scan from SD
+        found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+    }
     instance.unlockSPI();
 
     if (found) {
@@ -229,8 +408,22 @@ bool dict_lookup_stardict_all(const char *word, dict_result_t &result)
     instance.lockSPI();
     hw_sd_begin();
     for (int i = 0; i < stardict_count; i++) {
+        // Lazy-load PSRAM index on first lookup
+        if (!psram_idx_entries[i]) {
+            load_stardict_index(i);
+        }
+
+        bool found;
         dict_info_t &d = stardict_dicts[i];
-        if (stardict_lookup_in(d.idx_path, d.dict_path, word, result)) {
+        if (psram_idx_entries[i]) {
+            // Fast path: binary search in PSRAM
+            found = stardict_lookup_psram(i, word, result);
+        } else {
+            // Fallback: original linear scan from SD
+            found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+        }
+
+        if (found) {
             instance.unlockSPI();
             // Prepend dictionary name to definition
             string prefix = "[" + string(d.name.c_str()) + "]\n";
@@ -240,6 +433,86 @@ bool dict_lookup_stardict_all(const char *word, dict_result_t &result)
     }
     instance.unlockSPI();
     return false;
+}
+
+// ---- Prefix search (uses PSRAM index) ----
+
+// Search a single dictionary's PSRAM index for words starting with prefix.
+// Returns number of matches written to results (up to max_results).
+static int prefix_search_in_index(int dict_index, const char *prefix,
+                                  const char **results, int max_results)
+{
+    if (!psram_idx_entries[dict_index] || psram_idx_count[dict_index] == 0)
+        return 0;
+
+    int prefix_len = strlen(prefix);
+    if (prefix_len == 0) return 0;
+
+    idx_entry_t *entries = psram_idx_entries[dict_index];
+    uint32_t count = psram_idx_count[dict_index];
+
+    // Binary search for the first entry >= prefix (lower bound)
+    uint32_t lo = 0, hi = count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (strncasecmp(entries[mid].word, prefix, prefix_len) < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    // Iterate forward collecting matches
+    int found = 0;
+    for (uint32_t i = lo; i < count && found < max_results; i++) {
+        if (strncasecmp(entries[i].word, prefix, prefix_len) != 0)
+            break;
+        results[found++] = entries[i].word;
+    }
+    return found;
+}
+
+int dict_prefix_search(const char *prefix, const char **results, int max_results, int dict_index)
+{
+    if (!prefix || prefix[0] == '\0' || max_results <= 0) return 0;
+
+    dict_scan_stardict();
+
+    // Ensure indices are loaded (may need SPI for lazy-load)
+    bool need_spi = false;
+    if (dict_index >= 0) {
+        if (dict_index >= stardict_count) return 0;
+        if (!psram_idx_entries[dict_index]) need_spi = true;
+    } else {
+        for (int i = 0; i < stardict_count; i++) {
+            if (!psram_idx_entries[i]) { need_spi = true; break; }
+        }
+    }
+
+    if (need_spi) {
+        instance.lockSPI();
+        hw_sd_begin();
+        if (dict_index >= 0) {
+            load_stardict_index(dict_index);
+        } else {
+            for (int i = 0; i < stardict_count; i++) {
+                if (!psram_idx_entries[i]) load_stardict_index(i);
+            }
+        }
+        instance.unlockSPI();
+    }
+
+    // Perform prefix search (pure PSRAM reads, no SPI needed)
+    int total = 0;
+    if (dict_index >= 0) {
+        total = prefix_search_in_index(dict_index, prefix, results, max_results);
+    } else {
+        for (int i = 0; i < stardict_count && total < max_results; i++) {
+            total += prefix_search_in_index(i, prefix,
+                                            results + total, max_results - total);
+        }
+    }
+    return total;
 }
 
 // ---- Online lookup ----
@@ -446,4 +719,5 @@ bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t
 bool dict_lookup_stardict_all(const char *word, dict_result_t &result) { result.found = false; return false; }
 int dict_get_stardict_count() { return 0; }
 const char *dict_get_stardict_name(int index) { return NULL; }
+int dict_prefix_search(const char *prefix, const char **results, int max_results, int dict_index) { return 0; }
 #endif

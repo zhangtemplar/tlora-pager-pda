@@ -25,6 +25,7 @@
 using namespace std;
 
 #define MAX_STARDICT_DICTS  8
+#define MAX_SUGGESTIONS     10
 
 typedef struct {
     string word;
@@ -119,3 +120,13 @@ int dict_get_stardict_count();
  * @return Name string, or NULL if index out of range.
  */
 const char *dict_get_stardict_name(int index);
+
+/**
+ * @brief Search for words starting with a prefix (uses PSRAM index).
+ * @param prefix       The prefix to search for (case-insensitive).
+ * @param results      Output array of matching words (pointers into PSRAM, valid until dict unloaded).
+ * @param max_results  Maximum number of results to return.
+ * @param dict_index   Dictionary index (-1 for all dictionaries).
+ * @return Number of matching words found.
+ */
+int dict_prefix_search(const char *prefix, const char **results, int max_results, int dict_index);
