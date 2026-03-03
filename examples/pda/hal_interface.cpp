@@ -412,6 +412,7 @@ static void hw_sd_play(audio_source_type_t source, const char *filename)
     if (read_size == file_size) {
         Serial.print("Playing ");
         Serial.println(filename);
+
         if (isMP3) {
             playMP3(buf, read_size);
         } else {
@@ -593,121 +594,109 @@ static volatile bool recorder_running = false;
 static volatile uint32_t recorder_bytes_written = 0;
 static String recorder_filepath;
 
+#define RECORDER_MAX_PSRAM   (2 * 1024 * 1024)  // 2 MB cap
+#define RECORDER_READ_CHUNK  512                 // I2S read chunk size
+#define RECORDER_FLUSH_CHUNK 4096                // SD write chunk size
+
 static void recorderTask(void *args)
 {
-    // Use 512-byte chunks so SPI lock is held for only ~16ms per iteration,
-    // allowing display to refresh between writes.
-    const size_t CHUNK_SIZE = 512;
-    uint8_t *chunk = (uint8_t *)malloc(CHUNK_SIZE);
-    if (!chunk) {
-        Serial.println("Recorder: malloc failed");
+    // --- Allocate PSRAM buffer for raw PCM data ---
+    size_t psram_avail = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    size_t buf_size = psram_avail > RECORDER_MAX_PSRAM ? RECORDER_MAX_PSRAM : psram_avail;
+
+    uint8_t *psram_buf = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    if (!psram_buf) {
+        Serial.println("[Recorder] PSRAM alloc failed");
+        recorder_running = false;
+        recTaskHandle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    Serial.printf("[Recorder] PSRAM buffer: %u bytes (~%u sec at 32KB/s)\n",
+                  buf_size, buf_size / 32000);
+
+    // --- Open codec for recording (uses I2S, no SPI) ---
+    int ret = instance.codec.open(16, 1, 16000);
+    Serial.printf("[Recorder] codec.open() ret=%d\n", ret);
+    if (ret < 0) {
+        Serial.printf("[Recorder] codec open failed: 0x%X\n", ret);
+        heap_caps_free(psram_buf);
         recorder_running = false;
         recTaskHandle = NULL;
         vTaskDelete(NULL);
         return;
     }
 
-    // Open file and write WAV header — keep SPI lock for entire SD sequence
+    // --- Recording phase: capture raw PCM into PSRAM (no SPI needed) ---
+    recorder_bytes_written = 0;
+    size_t psram_offset = 0;
+
+    Serial.println("[Recorder] Recording started (PSRAM buffered)");
+
+    while (recorder_running && psram_offset + RECORDER_READ_CHUNK <= buf_size) {
+        instance.codec.read(psram_buf + psram_offset, RECORDER_READ_CHUNK);
+        if (!recorder_running) break;
+        psram_offset += RECORDER_READ_CHUNK;
+        recorder_bytes_written = psram_offset;
+    }
+
+    instance.codec.close();
+
+    size_t pcm_data_size = psram_offset;
+    Serial.printf("[Recorder] Recording done: %u bytes PCM\n", pcm_data_size);
+
+    // --- Flush phase: write everything to SD in one batch ---
     instance.lockSPI();
+    sd_deselect_all_spi();
     bool sd_ok = hw_sd_begin();
-    Serial.printf("[Recorder] Task: hw_sd_begin()=%d, path=%s\n", sd_ok, recorder_filepath.c_str());
-
     if (!sd_ok) {
-        Serial.println("[Recorder] Task: SD mount failed");
+        Serial.println("[Recorder] SD mount failed during flush");
         instance.unlockSPI();
-        free(chunk);
+        heap_caps_free(psram_buf);
         recorder_running = false;
         recTaskHandle = NULL;
         vTaskDelete(NULL);
         return;
     }
 
-    // Ensure recordings directory exists
     if (!SD.exists("/recordings")) {
-        Serial.println("[Recorder] Task: Creating /recordings/");
         SD.mkdir("/recordings");
     }
 
     File f = SD.open(recorder_filepath, FILE_WRITE);
-    Serial.printf("[Recorder] Task: SD.open() result=%d\n", (bool)f);
-
     if (!f) {
-        Serial.printf("[Recorder] Task: file open FAILED for: %s\n", recorder_filepath.c_str());
+        Serial.printf("[Recorder] File open FAILED: %s\n", recorder_filepath.c_str());
         instance.unlockSPI();
-        free(chunk);
+        heap_caps_free(psram_buf);
         recorder_running = false;
         recTaskHandle = NULL;
         vTaskDelete(NULL);
         return;
     }
 
-    // Write placeholder WAV header (44 bytes) and flush while SPI is still locked
-    pcm_wav_header_t header = PCM_WAV_HEADER_DEFAULT(0, 16, 16000, 1);
-    size_t hdr_written = f.write((uint8_t *)&header, sizeof(header));
-    f.flush();
-    instance.unlockSPI();
-    Serial.printf("[Recorder] Task: WAV header write=%zu/%zu\n", hdr_written, sizeof(header));
+    // Write PCM WAV header (44 bytes)
+    pcm_wav_header_t hdr = PCM_WAV_HEADER_DEFAULT(pcm_data_size, 16, 16000, 1);
+    f.write((uint8_t *)&hdr, sizeof(hdr));
 
-    // Open codec for recording (uses I2C/I2S, not SPI)
-    int ret = instance.codec.open(16, 1, 16000);
-    Serial.printf("[Recorder] Task: codec.open() ret=%d\n", ret);
-    if (ret < 0) {
-        Serial.printf("Recorder: codec open failed: 0x%X\n", ret);
-        instance.lockSPI();
-        f.close();
-        instance.unlockSPI();
-        free(chunk);
-        recorder_running = false;
-        recTaskHandle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    recorder_bytes_written = 0;
-    Serial.printf("Recorder: started, stack free=%u bytes\n",
-                  uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
-
-    while (recorder_running) {
-        // Hold SPI lock during both codec.read() AND f.write().
-        // codec.read() uses I2S (not SPI) so this is safe — it just blocks
-        // display updates for ~16ms per chunk (512 bytes at 16kHz mono 16-bit).
-        instance.lockSPI();
-        sd_deselect_all_spi();
-
-        instance.codec.read(chunk, CHUNK_SIZE);
-        if (!recorder_running) {
-            Serial.println("[Recorder] stopped during codec.read()");
-            instance.unlockSPI();
+    // Write PCM data in chunks
+    size_t written_total = 0;
+    while (written_total < pcm_data_size) {
+        size_t to_write = pcm_data_size - written_total;
+        if (to_write > RECORDER_FLUSH_CHUNK) to_write = RECORDER_FLUSH_CHUNK;
+        size_t w = f.write(psram_buf + written_total, to_write);
+        if (w == 0) {
+            Serial.printf("[Recorder] SD write error at offset %u\n", written_total);
             break;
         }
-
-        size_t written = f.write(chunk, CHUNK_SIZE);
-        instance.unlockSPI();
-
-        if (written != CHUNK_SIZE) {
-            Serial.printf("[Recorder] write error: wrote %zu / %zu bytes\n", written, CHUNK_SIZE);
-            break;
-        }
-        recorder_bytes_written += written;
-    }
-    if (!recorder_running) {
-        Serial.println("[Recorder] loop exited: recorder_running=false");
+        written_total += w;
     }
 
-    // Close codec
-    instance.codec.close();
-
-    // Update WAV header with final size
-    pcm_wav_header_t final_header = PCM_WAV_HEADER_DEFAULT(recorder_bytes_written, 16, 16000, 1);
-    instance.lockSPI();
-    sd_deselect_all_spi();
-    f.seek(0);
-    f.write((uint8_t *)&final_header, sizeof(final_header));
     f.close();
     instance.unlockSPI();
+    heap_caps_free(psram_buf);
 
-    free(chunk);
-    Serial.printf("Recorder: stopped, %lu bytes written\n", recorder_bytes_written);
+    Serial.printf("[Recorder] Saved %s: %u bytes PCM data\n",
+                  recorder_filepath.c_str(), written_total);
 
     recTaskHandle = NULL;
     vTaskDelete(NULL);
