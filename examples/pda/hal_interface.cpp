@@ -627,6 +627,18 @@ static void recorderTask(void *args)
         return;
     }
 
+    // Enable ES8311 hardware ALC (Automatic Level Control) for mic input
+    // ES8311 I2C address = 0x18
+    // REG 0x18: bit3=ALC enable, bit6:4=window size(011=192 samples), bit2:0=target level(110=-7.5dB)
+    // REG 0x19: bit7:4=max gain(0111=42dB), bit3:0=min gain(0000=0dB)
+    Wire.beginTransmission(0x18);
+    Wire.write(0x18); Wire.write(0x3E);
+    Wire.endTransmission();
+    Wire.beginTransmission(0x18);
+    Wire.write(0x19); Wire.write(0x70);
+    Wire.endTransmission();
+    Serial.println("[Recorder] ALC enabled");
+
     // --- Recording phase: capture raw PCM into PSRAM (no SPI needed) ---
     recorder_bytes_written = 0;
     size_t psram_offset = 0;
@@ -640,6 +652,10 @@ static void recorderTask(void *args)
         recorder_bytes_written = psram_offset;
     }
 
+    // Disable ALC before closing
+    Wire.beginTransmission(0x18);
+    Wire.write(0x18); Wire.write(0x00);
+    Wire.endTransmission();
     instance.codec.close();
 
     size_t pcm_data_size = psram_offset;
