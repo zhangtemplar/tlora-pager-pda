@@ -594,6 +594,7 @@ void setupGui()
     disable_keyboard();
 
     const lv_font_t  *main_font = MAIN_FONT;
+
     lv_theme_default_init(NULL, lv_color_black(), lv_palette_darken(LV_PALETTE_GREY, 3),
                           LV_THEME_DEFAULT_DARK, main_font);
 

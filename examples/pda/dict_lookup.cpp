@@ -213,13 +213,14 @@ static void html_to_text(char *s)
             // Handle specific tags
             if (strcmp(tag, "br") == 0) {
                 *w++ = '\n';
-            } else if (strcmp(tag, "p") == 0) {
+            } else if (strcmp(tag, "p") == 0 && !closing) {
                 if (w > s && *(w - 1) != '\n') *w++ = '\n';
+                if (w > s && (w - 1 == s || *(w - 2) != '\n')) *w++ = '\n';
             } else if (strcmp(tag, "ol") == 0) {
-                if (!closing) { ol_depth++; ol_counter = 0; }
+                if (!closing) { ol_depth++; ol_counter = 0; if (w > s && *(w - 1) != '\n') *w++ = '\n'; }
                 else { ol_depth--; if (ol_depth < 0) ol_depth = 0; }
             } else if (strcmp(tag, "ul") == 0) {
-                // nothing special needed
+                if (!closing) { if (w > s && *(w - 1) != '\n') *w++ = '\n'; }
             } else if (strcmp(tag, "li") == 0 && !closing) {
                 if (w > s && *(w - 1) != '\n') *w++ = '\n';
                 if (ol_depth > 0) {

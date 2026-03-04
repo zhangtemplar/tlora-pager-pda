@@ -76,13 +76,12 @@ static void do_search()
     if (found && result.found) {
         static char display_buf[2048];
         snprintf(display_buf, sizeof(display_buf),
-                 "%s  %s  %s\n\n%s",
-                 result.word.c_str(),
+                 "%s  %s\n%s",
                  result.phonetic.c_str(),
                  result.part_of_speech.c_str(),
                  result.definition.c_str());
         lv_label_set_text(result_label, display_buf);
-        lv_label_set_text(status_label, "");
+        lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(result_label, "Word not found.");
         lv_label_set_text(status_label, "Try connecting WiFi for online lookup.");
@@ -150,6 +149,7 @@ void ui_dictionary_enter(lv_obj_t *parent)
     lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cont, 5, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(cont, 2, LV_PART_MAIN);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
 
     // Scan for dictionaries
@@ -225,6 +225,13 @@ void ui_dictionary_enter(lv_obj_t *parent)
     lv_obj_set_width(result_label, lv_pct(100));
     lv_label_set_long_mode(result_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(result_label, "");
+
+    // Set CJK fallback font on result label only
+    static lv_font_t dict_font;
+    LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk);
+    dict_font = *MAIN_FONT;
+    dict_font.fallback = &lv_font_source_han_sans_sc_16_cjk;
+    lv_obj_set_style_text_font(result_label, &dict_font, LV_PART_MAIN);
 
     lv_menu_set_page(menu, main_page);
 

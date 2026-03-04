@@ -1554,11 +1554,11 @@ void hw_get_filesystem_music(vector < AudioParams_t > &list)
 
 #if defined(HAS_SD_CARD_SOCKET)
     Serial.println("\n================== SD Music List ==================");
-    hw_sd_list(list, "/", 0);
+    hw_sd_list(list, "/music", 0);
 #endif
 
     Serial.println("\n================== FFat Music List ==================");
-    hw_fat_list(list, "/", 0);
+    hw_fat_list(list, "/music", 0);
 
 #else
     list.push_back({AUDIO_SOURCE_FATFS, "/abc.mp3"});
