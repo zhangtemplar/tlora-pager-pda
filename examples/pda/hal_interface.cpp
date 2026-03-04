@@ -858,9 +858,9 @@ void hw_stop_nfc_discovery()
 }
 
 #ifdef ARDUINO_T_LORA_PAGER
-const uint8_t mic_gain = 10;
+const uint8_t mic_gain = 36;
 #else
-const uint8_t mic_gain = 10;
+const uint8_t mic_gain = 36;
 #endif
 
 
@@ -2111,13 +2111,33 @@ static lv_obj_t *find_scroll_target()
     return find_scrollable_in_tree(app_tile);
 }
 
-// Global navigation: Space+key combos (symbol-mode characters)
-//   Space+W='2' scroll up, Space+S='/' scroll down
-//   Space+P='0' page up,   Space+N=',' page down
-static bool handle_global_nav(int state, char c)
+// Global Space+key combos (symbol-mode characters)
+//   Space+W='2' scroll up,   Space+S='/' scroll down
+//   Space+P='0' page up,     Space+N=',' page down
+//   Space+F='-' volume down, Space+D='+' volume up
+static bool handle_global_shortcut(int state, char c)
 {
     if (state != 1) return false;
 
+    // Volume shortcuts (work regardless of scrollable target)
+    switch (c) {
+    case '+': { // Space+D -> volume up
+        uint8_t vol = hw_get_volume();
+        if (vol <= 90) vol += 10; else vol = 100;
+        hw_set_volume(vol);
+        Serial.printf("[Volume] %u\n", vol);
+        return true;
+    }
+    case '-': { // Space+F -> volume down
+        uint8_t vol = hw_get_volume();
+        if (vol >= 10) vol -= 10; else vol = 0;
+        hw_set_volume(vol);
+        Serial.printf("[Volume] %u\n", vol);
+        return true;
+    }
+    }
+
+    // Scroll shortcuts (need a scrollable target)
     lv_obj_t *target = find_scroll_target();
     if (!target) return false;
 
@@ -2149,8 +2169,8 @@ static void global_keyboard_wrapper(int state, char &c)
         if (c == 0) return;
     }
 
-    // Global Space+key navigation shortcuts
-    if (handle_global_nav(state, c)) {
+    // Global Space+key shortcuts (scroll, volume)
+    if (handle_global_shortcut(state, c)) {
         c = 0;
     }
 }

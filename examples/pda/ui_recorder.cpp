@@ -23,6 +23,7 @@ static lv_obj_t *rec_list = NULL;
 
 static vector<string> rec_files;
 static bool is_recording = false;
+static uint32_t playback_elapsed_ms = 0;
 
 static void refresh_file_list();
 
@@ -76,7 +77,7 @@ static void rec_btn_event(lv_event_t *e)
         if (hw_recorder_start(filename)) {
             is_recording = true;
             lv_label_set_text(rec_btn_label, LV_SYMBOL_STOP);
-            lv_label_set_text(status_label, "Recording...");
+            lv_label_set_text(status_label, "Recording");
             lv_label_set_text(duration_label, "0:00");
             Serial.println("[Recorder UI] Recording started");
         } else {
@@ -106,7 +107,9 @@ static void play_btn_event(lv_event_t *e)
     char *filepath = (char *)lv_event_get_user_data(e);
     if (filepath) {
         hw_set_sd_music_play(AUDIO_SOURCE_SDCARD, filepath);
-        lv_label_set_text(status_label, "Playing...");
+        playback_elapsed_ms = 0;
+        lv_label_set_text(status_label, "Playing");
+        lv_label_set_text(duration_label, "0:00");
     }
 }
 
@@ -127,7 +130,7 @@ static void delete_btn_event(lv_event_t *e)
 #endif
 
     hw_set_play_stop();
-    lv_label_set_text(status_label, "Deleted");
+    lv_label_set_text(status_label, "Ready");
     refresh_file_list();
 }
 
@@ -216,11 +219,20 @@ static void rec_timer_cb(lv_timer_t *t)
         uint32_t mins = secs / 60;
         secs = secs % 60;
         lv_label_set_text_fmt(duration_label, "%lu:%02lu", mins, secs);
+        return;
     }
 
-    if (!is_recording && status_label) {
-        char *text = lv_label_get_text(status_label);
-        if (strcmp(text, "Playing...") == 0 && !hw_player_running()) {
+    if (!status_label) return;
+
+    char *text = lv_label_get_text(status_label);
+    if (strcmp(text, "Playing") == 0) {
+        if (hw_player_running()) {
+            playback_elapsed_ms += 500;
+            uint32_t secs = playback_elapsed_ms / 1000;
+            uint32_t mins = secs / 60;
+            secs = secs % 60;
+            lv_label_set_text_fmt(duration_label, "%lu:%02lu", mins, secs);
+        } else {
             lv_label_set_text(status_label, "Ready");
         }
     }
@@ -229,6 +241,9 @@ static void rec_timer_cb(lv_timer_t *t)
 void ui_recorder_enter(lv_obj_t *parent)
 {
     is_recording = false;
+
+    // Enable keyboard so global shortcuts (volume, scroll) work
+    enable_keyboard();
 
     menu = create_menu(parent, back_event_handler);
 
@@ -277,39 +292,30 @@ void ui_recorder_enter(lv_obj_t *parent)
     lv_obj_t *ctrl_row = lv_obj_create(main_page);
     lv_obj_set_size(ctrl_row, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(ctrl_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(ctrl_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(ctrl_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_border_width(ctrl_row, 0, 0);
-    lv_obj_set_style_pad_all(ctrl_row, 5, 0);
+    lv_obj_set_style_pad_all(ctrl_row, 2, 0);
+    lv_obj_set_style_pad_column(ctrl_row, 8, 0);
     lv_obj_remove_flag(ctrl_row, LV_OBJ_FLAG_SCROLLABLE);
 
     // Record button
     rec_btn = lv_btn_create(ctrl_row);
-    lv_obj_set_size(rec_btn, 50, 40);
+    lv_obj_set_size(rec_btn, 36, 28);
     lv_obj_set_style_bg_color(rec_btn, lv_palette_main(LV_PALETTE_RED), 0);
     rec_btn_label = lv_label_create(rec_btn);
     lv_label_set_text(rec_btn_label, LV_SYMBOL_AUDIO);
     lv_obj_center(rec_btn_label);
     lv_obj_add_event_cb(rec_btn, rec_btn_event, LV_EVENT_CLICKED, NULL);
 
-    // Status + duration column
-    lv_obj_t *info_col = lv_obj_create(ctrl_row);
-    lv_obj_set_size(info_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(info_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_border_width(info_col, 0, 0);
-    lv_obj_set_style_pad_all(info_col, 0, 0);
-    lv_obj_remove_flag(info_col, LV_OBJ_FLAG_SCROLLABLE);
-
-    status_label = lv_label_create(info_col);
+    // Status label
+    status_label = lv_label_create(ctrl_row);
     lv_label_set_text(status_label, "Ready");
 
-    duration_label = lv_label_create(info_col);
+    // Duration label
+    duration_label = lv_label_create(ctrl_row);
     lv_label_set_text(duration_label, "0:00");
 
     // Recordings list
-    lv_obj_t *list_header = lv_label_create(main_page);
-    lv_label_set_text(list_header, "RECORDINGS");
-    lv_obj_set_style_text_color(list_header, lv_palette_main(LV_PALETTE_GREY), 0);
-
     rec_list = lv_list_create(main_page);
     lv_obj_set_size(rec_list, lv_pct(100), lv_pct(65));
     lv_obj_set_style_border_width(rec_list, 0, LV_PART_MAIN);
