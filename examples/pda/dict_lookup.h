@@ -47,6 +47,7 @@ typedef struct {
     string idx_path;
     string dict_path;
 #endif
+    char sametypesequence;  // from .ifo, default 'm' (plain text), 'h' = HTML
 } dict_info_t;
 
 /**

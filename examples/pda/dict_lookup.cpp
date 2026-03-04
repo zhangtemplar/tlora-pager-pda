@@ -41,20 +41,26 @@ static uint32_t psram_idx_count[MAX_STARDICT_DICTS] = {};
 
 #define MAX_IDX_FILE_SIZE  (4 * 1024 * 1024)  // 4MB cap per index
 
-static void parse_ifo_bookname(const char *ifo_path, String &bookname)
+static void parse_ifo_file(const char *ifo_path, String &bookname, char &sametypesequence)
 {
     File f = SD.open(ifo_path, FILE_READ);
     if (!f) {
         bookname = "Unknown";
+        sametypesequence = 'm';
         return;
     }
     bookname = "Unknown";
+    sametypesequence = 'm';
     while (f.available()) {
         String line = f.readStringUntil('\n');
         line.trim();
         if (line.startsWith("bookname=")) {
             bookname = line.substring(9);
-            break;
+        } else if (line.startsWith("sametypesequence=")) {
+            String val = line.substring(17);
+            if (val.length() > 0) {
+                sametypesequence = val.charAt(0);
+            }
         }
     }
     f.close();
@@ -106,15 +112,17 @@ int dict_scan_stardict()
             continue;
         }
 
-        // Parse bookname from .ifo
+        // Parse bookname and sametypesequence from .ifo
         String bookname;
-        parse_ifo_bookname(ifo_path.c_str(), bookname);
+        char sts = 'm';
+        parse_ifo_file(ifo_path.c_str(), bookname, sts);
 
         dict_info_t &d = stardict_dicts[stardict_count];
         d.name = bookname;
         d.ifo_path = ifo_path;
         d.idx_path = idx_path;
         d.dict_path = dict_path;
+        d.sametypesequence = sts;
         stardict_count++;
     }
     dir.close();
@@ -139,6 +147,158 @@ const char *dict_get_stardict_name(int index)
 {
     if (index < 0 || index >= stardict_count) return NULL;
     return stardict_dicts[index].name.c_str();
+}
+
+// Convert HTML definition to readable plain text (in-place).
+// Handles common tags, HTML entities, and whitespace cleanup.
+static void html_to_text(char *s)
+{
+    char *r = s;    // read pointer
+    char *w = s;    // write pointer
+    int ol_depth = 0;       // ordered list nesting
+    int ol_counter = 0;     // current item number in <ol>
+    bool in_blockquote = false;
+    bool skip_div_source = false;
+    int skip_depth = 0;
+
+    while (*r) {
+        if (*r == '<') {
+            // Extract tag name (lowercase)
+            const char *tag_start = r + 1;
+            bool closing = false;
+            if (*tag_start == '/') { closing = true; tag_start++; }
+            char tag[32];
+            int ti = 0;
+            const char *tp = tag_start;
+            while (*tp && *tp != '>' && *tp != ' ' && *tp != '/' && ti < 30) {
+                tag[ti++] = (*tp >= 'A' && *tp <= 'Z') ? (*tp + 32) : *tp;
+                tp++;
+            }
+            tag[ti] = '\0';
+
+            // Check for <div class="source"> to skip
+            if (!closing && strcmp(tag, "div") == 0) {
+                // Look for class="source" in attributes
+                const char *attr = tp;
+                const char *end = r;
+                while (*end && *end != '>') end++;
+                // Simple check: search for "source" between tp and end
+                bool is_source = false;
+                for (const char *a = attr; a < end; a++) {
+                    if (strncmp(a, "source", 6) == 0) { is_source = true; break; }
+                }
+                if (is_source) {
+                    skip_div_source = true;
+                    skip_depth = 1;
+                    // Advance past >
+                    while (*r && *r != '>') r++;
+                    if (*r) r++;
+                    continue;
+                }
+            }
+
+            // Skip to end of tag
+            while (*r && *r != '>') r++;
+            if (*r) r++;
+
+            if (skip_div_source) {
+                if (!closing && strcmp(tag, "div") == 0) skip_depth++;
+                if (closing && strcmp(tag, "div") == 0) {
+                    skip_depth--;
+                    if (skip_depth <= 0) skip_div_source = false;
+                }
+                continue;
+            }
+
+            // Handle specific tags
+            if (strcmp(tag, "br") == 0) {
+                *w++ = '\n';
+            } else if (strcmp(tag, "p") == 0) {
+                if (w > s && *(w - 1) != '\n') *w++ = '\n';
+            } else if (strcmp(tag, "ol") == 0) {
+                if (!closing) { ol_depth++; ol_counter = 0; }
+                else { ol_depth--; if (ol_depth < 0) ol_depth = 0; }
+            } else if (strcmp(tag, "ul") == 0) {
+                // nothing special needed
+            } else if (strcmp(tag, "li") == 0 && !closing) {
+                if (w > s && *(w - 1) != '\n') *w++ = '\n';
+                if (ol_depth > 0) {
+                    ol_counter++;
+                    int n = snprintf((char *)w, 12, "%d. ", ol_counter);
+                    w += n;
+                } else {
+                    *w++ = '-'; *w++ = ' ';
+                }
+            } else if (strcmp(tag, "blockquote") == 0) {
+                if (!closing) {
+                    if (w > s && *(w - 1) != '\n') *w++ = '\n';
+                    *w++ = '"';
+                    in_blockquote = true;
+                } else {
+                    *w++ = '"';
+                    *w++ = '\n';
+                    in_blockquote = false;
+                }
+            } else if (strcmp(tag, "h1") == 0 || strcmp(tag, "h2") == 0 ||
+                       strcmp(tag, "h3") == 0 || strcmp(tag, "h4") == 0) {
+                if (w > s && *(w - 1) != '\n') *w++ = '\n';
+            }
+            // All other tags: silently stripped
+        } else if (*r == '&') {
+            if (skip_div_source) { r++; continue; }
+            // HTML entity decoding
+            if (strncmp(r, "&amp;", 5) == 0) { *w++ = '&'; r += 5; }
+            else if (strncmp(r, "&lt;", 4) == 0) { *w++ = '<'; r += 4; }
+            else if (strncmp(r, "&gt;", 4) == 0) { *w++ = '>'; r += 4; }
+            else if (strncmp(r, "&quot;", 6) == 0) { *w++ = '"'; r += 6; }
+            else if (strncmp(r, "&apos;", 6) == 0) { *w++ = '\''; r += 6; }
+            else if (strncmp(r, "&nbsp;", 6) == 0) { *w++ = ' '; r += 6; }
+            else if (strncmp(r, "&#", 2) == 0) {
+                // Numeric character reference &#NNN;
+                r += 2;
+                int val = 0;
+                while (*r >= '0' && *r <= '9') { val = val * 10 + (*r - '0'); r++; }
+                if (*r == ';') r++;
+                if (val > 0 && val < 128) *w++ = (char)val;
+            } else {
+                *w++ = *r++;
+            }
+        } else {
+            if (skip_div_source) { r++; continue; }
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+
+    // Whitespace cleanup: collapse 3+ consecutive newlines to 2
+    r = s; w = s;
+    int nl_count = 0;
+    while (*r) {
+        if (*r == '\n') {
+            nl_count++;
+            if (nl_count <= 2) *w++ = *r;
+        } else {
+            nl_count = 0;
+            *w++ = *r;
+        }
+        r++;
+    }
+    *w = '\0';
+
+    // Trim leading whitespace
+    r = s;
+    while (*r == ' ' || *r == '\n' || *r == '\r' || *r == '\t') r++;
+    if (r != s) {
+        w = s;
+        while (*r) *w++ = *r++;
+        *w = '\0';
+    }
+
+    // Trim trailing whitespace
+    size_t len = strlen(s);
+    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\n' || s[len - 1] == '\r' || s[len - 1] == '\t')) {
+        s[--len] = '\0';
+    }
 }
 
 // Compare function for qsort/bsearch on idx_entry_t
@@ -287,6 +447,10 @@ static bool stardict_lookup_psram(int dict_index, const char *word, dict_result_
     def_buf[data_size] = '\0';
     dict_file.close();
 
+    if (stardict_dicts[dict_index].sametypesequence == 'h') {
+        html_to_text(def_buf);
+    }
+
     result.word = found->word;
     result.definition = def_buf;
     result.found = true;
@@ -296,7 +460,8 @@ static bool stardict_lookup_psram(int dict_index, const char *word, dict_result_
 
 // Look up in a single StarDict dictionary by its paths
 static bool stardict_lookup_in(const String &idx_path, const String &dict_path,
-                               const char *word, dict_result_t &result)
+                               const char *word, dict_result_t &result,
+                               char sametypesequence = 'm')
 {
     result.found = false;
 
@@ -348,6 +513,10 @@ static bool stardict_lookup_in(const String &idx_path, const String &dict_path,
             def_buf[data_size] = '\0';
             dict_file.close();
 
+            if (sametypesequence == 'h') {
+                html_to_text(def_buf);
+            }
+
             result.word = entry_word;
             result.definition = def_buf;
             result.found = true;
@@ -386,7 +555,7 @@ bool dict_lookup_stardict_single(int dict_index, const char *word, dict_result_t
         found = stardict_lookup_psram(dict_index, word, result);
     } else {
         // Fallback: original linear scan from SD
-        found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+        found = stardict_lookup_in(d.idx_path, d.dict_path, word, result, d.sametypesequence);
     }
     instance.unlockSPI();
 
@@ -420,7 +589,7 @@ bool dict_lookup_stardict_all(const char *word, dict_result_t &result)
             found = stardict_lookup_psram(i, word, result);
         } else {
             // Fallback: original linear scan from SD
-            found = stardict_lookup_in(d.idx_path, d.dict_path, word, result);
+            found = stardict_lookup_in(d.idx_path, d.dict_path, word, result, d.sametypesequence);
         }
 
         if (found) {
