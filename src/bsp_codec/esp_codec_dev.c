@@ -275,13 +275,14 @@ int esp_codec_dev_set_out_vol(esp_codec_dev_handle_t handle, int volume)
     if (dev == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
+    // Always store volume so it is applied when codec reopens
+    dev->volume = volume;
     int ret = _verify_codec_setting(dev, true);
     if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
+        return ESP_CODEC_DEV_OK;
     }
     const audio_codec_if_t *codec = dev->codec_if;
     float db_value = _get_vol_db(&dev->vol_curve, volume);
-    dev->volume = volume;
     // Prefer to use software volume setting
     if (dev->sw_vol) {
         dev->sw_vol->set_vol(dev->sw_vol, db_value);
@@ -320,13 +321,10 @@ int esp_codec_dev_set_vol_handler(esp_codec_dev_handle_t handle, const audio_cod
 int esp_codec_dev_get_out_vol(esp_codec_dev_handle_t handle, int *volume)
 {
     codec_dev_t *dev = (codec_dev_t *) handle;
-    if (dev == NULL) {
+    if (dev == NULL || volume == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
-    int ret = _verify_codec_setting(dev, true);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
+    // Always return stored volume, even when codec is closed
     *volume = dev->volume;
     return ESP_CODEC_DEV_OK;
 }
