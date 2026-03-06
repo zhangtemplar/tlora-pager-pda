@@ -18,6 +18,14 @@ static lv_obj_t *search_ta = NULL;
 static lv_obj_t *result_label = NULL;
 static lv_obj_t *status_label = NULL;
 
+#if LV_USE_TINY_TTF && defined(ARDUINO)
+#include <esp_heap_caps.h>
+#include <SD.h>
+static lv_font_t *ttf_font = NULL;
+static uint8_t *ttf_data = NULL;
+#endif
+static lv_font_t dict_font;
+
 // selected_dict: 0 = "All Dictionaries", 1..N = specific dict (index 0..N-1)
 static int selected_dict = 0;
 
@@ -131,6 +139,10 @@ static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
+#if LV_USE_TINY_TTF
+        if (ttf_font) { lv_tiny_ttf_destroy(ttf_font); ttf_font = NULL; }
+        if (ttf_data) { free(ttf_data); ttf_data = NULL; }
+#endif
         disable_keyboard();
         lv_obj_clean(menu);
         lv_obj_del(menu);
@@ -226,11 +238,63 @@ void ui_dictionary_enter(lv_obj_t *parent)
     lv_label_set_long_mode(result_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(result_label, "");
 
-    // Set CJK fallback font on result label only
-    static lv_font_t dict_font;
-    LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk);
+    // Set CJK fallback font on result label: try TTF from SD
     dict_font = *MAIN_FONT;
-    dict_font.fallback = &lv_font_source_han_sans_sc_16_cjk;
+    dict_font.fallback = NULL;
+#if LV_USE_TINY_TTF && defined(ARDUINO)
+    ttf_font = NULL;
+    ttf_data = NULL;
+    printf("[Dictionary] TTF: locking SPI...\n");
+    instance.lockSPI();
+    if (hw_sd_begin()) {
+        printf("[Dictionary] TTF: SD mounted, opening fonts/dict_font.ttf\n");
+        File f = SD.open("/fonts/dict_font.ttf", FILE_READ);
+        if (f) {
+            size_t fsize = f.size();
+            printf("[Dictionary] TTF: file opened, size=%zu bytes\n", fsize);
+            size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            printf("[Dictionary] TTF: free PSRAM: %zu\n", free_psram);
+            ttf_data = (uint8_t *)heap_caps_malloc(fsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (ttf_data) {
+                printf("[Dictionary] TTF: malloc OK, reading in chunks...\n");
+                size_t total_read = 0;
+                while (total_read < fsize) {
+                    size_t to_read = fsize - total_read;
+                    if (to_read > 4096) to_read = 4096;
+                    size_t n = f.read(ttf_data + total_read, to_read);
+                    if (n == 0) break;
+                    total_read += n;
+                }
+                printf("[Dictionary] TTF: read %zu / %zu bytes\n", total_read, fsize);
+                if (total_read == fsize) {
+                    ttf_font = lv_tiny_ttf_create_data(ttf_data, fsize, 16);
+                    if (ttf_font) {
+                        printf("[Dictionary] TTF: font created OK, line_height=%d\n",
+                               ttf_font->line_height);
+                        dict_font.fallback = ttf_font;
+                    } else {
+                        printf("[Dictionary] TTF: lv_tiny_ttf_create_data FAILED\n");
+                        free(ttf_data); ttf_data = NULL;
+                    }
+                } else {
+                    printf("[Dictionary] TTF: read incomplete, aborting\n");
+                    free(ttf_data); ttf_data = NULL;
+                }
+            } else {
+                printf("[Dictionary] TTF: malloc FAILED for %zu bytes\n", fsize);
+            }
+            f.close();
+        } else {
+            printf("[Dictionary] TTF: file not found on SD\n");
+        }
+    } else {
+        printf("[Dictionary] TTF: hw_sd_begin FAILED\n");
+    }
+    instance.unlockSPI();
+    printf("[Dictionary] TTF: done, ttf_font=%p\n", ttf_font);
+#else
+    printf("[Dictionary] TTF: DISABLED (LV_USE_TINY_TTF=0 in lv_conf.h)\n");
+#endif
     lv_obj_set_style_text_font(result_label, &dict_font, LV_PART_MAIN);
 
     lv_menu_set_page(menu, main_page);
@@ -238,7 +302,7 @@ void ui_dictionary_enter(lv_obj_t *parent)
     // Focus and enable keyboard
     lv_group_add_obj(lv_group_get_default(), search_ta);
     lv_group_focus_obj(search_ta);
-    lv_obj_add_state(search_ta, (lv_state_t)(LV_STATE_FOCUSED | LV_STATE_EDITED));
+    lv_group_set_editing(lv_group_get_default(), true);
     enable_keyboard();
 
 #ifdef USING_TOUCHPAD

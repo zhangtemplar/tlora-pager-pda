@@ -463,7 +463,7 @@ void ui_calculator_enter(lv_obj_t *parent)
     // Focus the textarea and enable keyboard
     lv_group_add_obj(lv_group_get_default(), expr_ta);
     lv_group_focus_obj(expr_ta);
-    lv_obj_add_state(expr_ta, (lv_state_t)(LV_STATE_FOCUSED | LV_STATE_EDITED));
+    lv_group_set_editing(lv_group_get_default(), true);
     enable_keyboard();
 
 #ifdef USING_TOUCHPAD

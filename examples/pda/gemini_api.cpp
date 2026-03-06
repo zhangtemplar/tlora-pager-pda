@@ -85,9 +85,10 @@ gemini_response_t gemini_send_audio(const uint8_t *wav_data, size_t wav_len, con
                                 "respond to what was said. Keep responses concise.";
 
     // Calculate total size needed
-    size_t json_prefix_len = 256 + strlen(system_prompt);
-    size_t json_suffix_len = 32;
-    size_t total_len = json_prefix_len + b64_len + json_suffix_len;
+    const char *json_prefix = "{\"contents\":[{\"parts\":[{\"inline_data\":{\"mime_type\":\"audio/wav\",\"data\":\"";
+    size_t prefix_len = strlen(json_prefix);
+    size_t suffix_max = 32 + strlen(system_prompt);
+    size_t total_len = prefix_len + b64_len + suffix_max;
 
     char *json_body = (char *)heap_caps_malloc(total_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!json_body) {
@@ -96,13 +97,12 @@ gemini_response_t gemini_send_audio(const uint8_t *wav_data, size_t wav_len, con
         return resp;
     }
 
-    int written = snprintf(json_body, json_prefix_len,
-                           "{\"contents\":[{\"parts\":[{\"inline_data\":{\"mime_type\":\"audio/wav\",\"data\":\"");
+    memcpy(json_body, json_prefix, prefix_len);
+    int written = prefix_len;
     memcpy(json_body + written, b64_data, b64_len);
     written += b64_len;
-    int suffix = snprintf(json_body + written, json_suffix_len,
-                          "\"}},{\"text\":\"%s\"}]}]}", system_prompt);
-    written += suffix;
+    written += snprintf(json_body + written, suffix_max + 1,
+                        "\"}},{\"text\":\"%s\"}]}]}", system_prompt);
     json_body[written] = '\0';
 
     free(b64_data);
@@ -110,7 +110,7 @@ gemini_response_t gemini_send_audio(const uint8_t *wav_data, size_t wav_len, con
     // Build URL
     char url[256];
     snprintf(url, sizeof(url),
-             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=%s",
+             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=%s",
              api_key);
 
     // Send request
@@ -158,7 +158,7 @@ gemini_response_t gemini_send_text(const char *prompt, const char *api_key)
 
     char url[256];
     snprintf(url, sizeof(url),
-             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=%s",
+             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=%s",
              api_key);
 
     string body_str = json_str;
