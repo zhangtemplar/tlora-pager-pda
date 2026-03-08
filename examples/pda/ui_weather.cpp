@@ -118,16 +118,6 @@ static void weather_keyboard_cb(int state, char &c)
 {
     if (state != 1) return;
 
-    // Space+Q ('1') → back/quit
-    if (c == '1') {
-        if (menu) {
-            lv_obj_t *back_btn = lv_menu_get_main_header_back_button(menu);
-            if (back_btn) lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
-        }
-        c = 0;
-        return;
-    }
-
     if (!main_page) return;
 
     int page_h = lv_obj_get_height(main_page);

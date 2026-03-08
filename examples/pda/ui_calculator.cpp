@@ -276,7 +276,6 @@ static lv_obj_t *menu = NULL;
 static lv_obj_t *quit_btn = NULL;
 static lv_obj_t *expr_ta = NULL;
 static lv_obj_t *result_label = NULL;
-static lv_obj_t *mode_label = NULL;
 static lv_obj_t *history_list = NULL;
 
 static void format_result(double val, char *buf, size_t len)
@@ -314,6 +313,18 @@ static void do_calculate()
             strncpy(history[MAX_HISTORY - 1], expr, MAX_EXPR_LEN - 1);
             strncpy(history_results[MAX_HISTORY - 1], buf, 63);
         }
+
+        // Update history label
+        if (history_list) {
+            static char hist_buf[2048];
+            hist_buf[0] = '\0';
+            for (int i = history_count - 1; i >= 0; i--) {
+                char line[384];
+                snprintf(line, sizeof(line), "%s = %s\n", history[i], history_results[i]);
+                strncat(hist_buf, line, sizeof(hist_buf) - strlen(hist_buf) - 1);
+            }
+            lv_label_set_text(history_list, hist_buf);
+        }
     } else {
         lv_label_set_text(result_label, "= Error");
     }
@@ -323,6 +334,7 @@ static void back_event_handler(lv_event_t *e)
 {
     lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
     if (lv_menu_back_btn_is_root(menu, obj)) {
+        hw_set_keyboard_read_callback(NULL);
         disable_keyboard();
         lv_obj_clean(menu);
         lv_obj_del(menu);
@@ -332,6 +344,28 @@ static void back_event_handler(lv_event_t *e)
         }
         menu_show();
     }
+}
+
+// Keyboard callback: intercept Space+D(+) and Space+F(-) so they
+// are typed as math operators instead of triggering global volume shortcuts.
+static void calc_keyboard_cb(int state, char &c)
+{
+#ifdef ARDUINO
+    if (state != 1) return;
+    // '+' and '-' are produced by Space+D / Space+F.
+    // '$' maps to '(', '?' maps to ')' (no parens on T-Deck keyboard).
+    // Consume them here (c=0) and insert directly into the textarea.
+    if (c == '+' || c == '-') {
+        lv_textarea_add_char(expr_ta, c);
+        c = 0;
+    } else if (c == '$') {
+        lv_textarea_add_char(expr_ta, '(');
+        c = 0;
+    } else if (c == '?') {
+        lv_textarea_add_char(expr_ta, ')');
+        c = 0;
+    }
+#endif
 }
 
 static void ta_event_cb(lv_event_t *e)
@@ -347,6 +381,9 @@ static void ta_event_cb(lv_event_t *e)
             if (edited) {
                 lv_group_set_editing(lv_obj_get_group(ta), false);
                 disable_keyboard();
+            } else {
+                lv_group_set_editing(lv_obj_get_group(ta), true);
+                enable_keyboard();
             }
         } else if (code == LV_EVENT_FOCUSED) {
             if (edited) {
@@ -358,20 +395,8 @@ static void ta_event_cb(lv_event_t *e)
     if (code == LV_EVENT_KEY) {
         lv_key_t key = *(lv_key_t *)lv_event_get_param(e);
         if (key == LV_KEY_ENTER) {
-            lv_textarea_delete_char(ta);
             do_calculate();
             lv_event_stop_processing(e);
-        }
-    }
-
-    if (lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
-        if (code == LV_EVENT_KEY) {
-            lv_key_t key = *(lv_key_t *)lv_event_get_param(e);
-            if (key == LV_KEY_ENTER) {
-                lv_textarea_delete_char(ta);
-                do_calculate();
-                lv_event_stop_processing(e);
-            }
         }
     }
 }
@@ -389,11 +414,11 @@ void ui_calculator_enter(lv_obj_t *parent)
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_flex_main_place(cont, LV_FLEX_ALIGN_START, LV_PART_MAIN);
 
-    // Expression input
+    // Expression input (use $ for (, ? for ) on the keyboard)
     expr_ta = lv_textarea_create(cont);
     lv_obj_set_width(expr_ta, lv_pct(100));
-    lv_obj_set_height(expr_ta, 45);
-    lv_textarea_set_placeholder_text(expr_ta, "e.g. sin(45)+log(100)*2");
+    lv_obj_set_height(expr_ta, 40);
+    lv_textarea_set_placeholder_text(expr_ta, "$ = (  ? = )  e.g. sin$45?+2*3");
     lv_textarea_set_one_line(expr_ta, true);
     lv_textarea_set_max_length(expr_ta, MAX_EXPR_LEN);
     lv_obj_add_event_cb(expr_ta, ta_event_cb, LV_EVENT_ALL, NULL);
@@ -405,58 +430,12 @@ void ui_calculator_enter(lv_obj_t *parent)
     lv_obj_set_style_text_color(result_label, lv_color_make(0, 200, 0), LV_PART_MAIN);
     lv_label_set_text(result_label, "= ");
 
-    // Bottom row: DEG/RAD toggle + Clear
-    lv_obj_t *btn_row = lv_obj_create(cont);
-    lv_obj_set_size(btn_row, lv_pct(100), 40);
-    lv_obj_set_style_border_width(btn_row, 0, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(btn_row, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_flex_main_place(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_PART_MAIN);
-
-    // DEG/RAD button
-    lv_obj_t *mode_btn = lv_btn_create(btn_row);
-    lv_obj_set_size(mode_btn, 80, 35);
-    mode_label = lv_label_create(mode_btn);
-    lv_label_set_text(mode_label, "DEG");
-    lv_obj_center(mode_label);
-    lv_obj_add_event_cb(mode_btn, [](lv_event_t *e) {
-        deg_mode = !deg_mode;
-        lv_label_set_text(mode_label, deg_mode ? "DEG" : "RAD");
-    }, LV_EVENT_CLICKED, NULL);
-
-    // Clear button
-    lv_obj_t *clear_btn = lv_btn_create(btn_row);
-    lv_obj_set_size(clear_btn, 80, 35);
-    lv_obj_t *clr_lbl = lv_label_create(clear_btn);
-    lv_label_set_text(clr_lbl, "Clear");
-    lv_obj_center(clr_lbl);
-    lv_obj_add_event_cb(clear_btn, [](lv_event_t *e) {
-        lv_textarea_set_text(expr_ta, "");
-        lv_label_set_text(result_label, "= ");
-    }, LV_EVENT_CLICKED, NULL);
-
-    // History button
-    lv_obj_t *hist_btn = lv_btn_create(btn_row);
-    lv_obj_set_size(hist_btn, 80, 35);
-    lv_obj_t *hist_lbl = lv_label_create(hist_btn);
-    lv_label_set_text(hist_lbl, "History");
-    lv_obj_center(hist_lbl);
-    lv_obj_add_event_cb(hist_btn, [](lv_event_t *e) {
-        if (history_count == 0) {
-            ui_msg_pop_up("History", "No history yet.");
-            return;
-        }
-        // Build history string
-        static char hist_buf[2048];
-        hist_buf[0] = '\0';
-        for (int i = history_count - 1; i >= 0; i--) {
-            char line[384];
-            snprintf(line, sizeof(line), "%s = %s\n", history[i], history_results[i]);
-            strncat(hist_buf, line, sizeof(hist_buf) - strlen(hist_buf) - 1);
-        }
-        ui_msg_pop_up("History", hist_buf);
-    }, LV_EVENT_CLICKED, NULL);
+    // History (scrollable label)
+    history_list = lv_label_create(cont);
+    lv_obj_set_width(history_list, lv_pct(100));
+    lv_label_set_long_mode(history_list, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(history_list, lv_color_make(160, 160, 160), LV_PART_MAIN);
+    lv_label_set_text(history_list, "");
 
     lv_menu_set_page(menu, main_page);
 
@@ -464,7 +443,9 @@ void ui_calculator_enter(lv_obj_t *parent)
     lv_group_add_obj(lv_group_get_default(), expr_ta);
     lv_group_focus_obj(expr_ta);
     lv_group_set_editing(lv_group_get_default(), true);
+    lv_obj_add_state(expr_ta, (lv_state_t)(LV_STATE_FOCUSED | LV_STATE_EDITED));
     enable_keyboard();
+    hw_set_keyboard_read_callback(calc_keyboard_cb);
 
 #ifdef USING_TOUCHPAD
     quit_btn = create_floating_button([](lv_event_t *e) {
