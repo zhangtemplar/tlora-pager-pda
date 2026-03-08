@@ -37,12 +37,15 @@ static bool forecast_ui_built = false;
 
 // UI elements
 static lv_obj_t *city_label = NULL;
+static lv_obj_t *date_label = NULL;
 static lv_obj_t *updated_label = NULL;
 static lv_obj_t *temp_label = NULL;
 static lv_obj_t *detail_label = NULL;
 static lv_obj_t *desc_label = NULL;
 static lv_obj_t *status_label = NULL;
 static lv_obj_t *weather_icon = NULL;
+static lv_obj_t *hourly_table = NULL;
+static lv_obj_t *daily_table = NULL;
 
 // --- Data structures ---
 
@@ -59,6 +62,7 @@ struct current_weather_t {
 };
 
 struct hourly_entry_t {
+    time_t ts;
     char time_str[6];
     char desc[24];
     float temp;
@@ -68,6 +72,7 @@ struct hourly_entry_t {
 };
 
 struct daily_entry_t {
+    time_t ts;
     char day_str[6];
     char desc[24];
     float temp_min;
@@ -86,6 +91,7 @@ static hourly_entry_t hourly[MAX_HOURLY] = {};
 static daily_entry_t daily[MAX_DAILY] = {};
 static int hourly_count = 0;
 static int daily_count = 0;
+static int32_t tz_offset = 0;  // timezone offset from API (seconds)
 static bool data_valid = false;
 static uint32_t last_fetch_time = 0;
 
@@ -169,6 +175,63 @@ static void setup_table(lv_obj_t *table, int tw)
     lv_obj_set_style_border_color(table, lv_color_make(60, 60, 60), LV_PART_ITEMS);
 }
 
+static void update_forecast_tables()
+{
+    char buf[16];
+    time_t now = time(NULL);
+
+    if (hourly_table && hourly_count > 0) {
+        // Filter: skip past hourly entries
+        int start = 0;
+        while (start < hourly_count && hourly[start].ts < now) start++;
+        int visible = hourly_count - start;
+        if (visible < 0) visible = 0;
+
+        lv_table_set_row_count(hourly_table, visible + 1);
+        for (int i = 0; i < visible; i++) {
+            int r = i + 1;
+            int si = start + i;
+            lv_table_set_cell_value(hourly_table, r, 0, hourly[si].time_str);
+            lv_table_set_cell_value(hourly_table, r, 1, hourly[si].desc);
+            snprintf(buf, sizeof(buf), "%.0f\xC2\xB0" "C", hourly[si].temp);
+            lv_table_set_cell_value(hourly_table, r, 2, buf);
+            snprintf(buf, sizeof(buf), "%d%%", hourly[si].humidity);
+            lv_table_set_cell_value(hourly_table, r, 3, buf);
+            snprintf(buf, sizeof(buf), "%.1fm/s", hourly[si].wind);
+            lv_table_set_cell_value(hourly_table, r, 4, buf);
+            snprintf(buf, sizeof(buf), "%d%%", hourly[si].pop_pct);
+            lv_table_set_cell_value(hourly_table, r, 5, buf);
+        }
+    }
+
+    if (daily_table && daily_count > 0) {
+        // Filter: skip past daily entries (compare start-of-day)
+        time_t today_start = now + tz_offset;
+        today_start = (today_start / 86400) * 86400 - tz_offset;  // midnight local time in UTC
+
+        int start = 0;
+        while (start < daily_count && daily[start].ts < today_start) start++;
+        int visible = daily_count - start;
+        if (visible < 0) visible = 0;
+
+        lv_table_set_row_count(daily_table, visible + 1);
+        for (int i = 0; i < visible; i++) {
+            int r = i + 1;
+            int si = start + i;
+            lv_table_set_cell_value(daily_table, r, 0, daily[si].day_str);
+            lv_table_set_cell_value(daily_table, r, 1, daily[si].desc);
+            snprintf(buf, sizeof(buf), "%.0f/%.0f\xC2\xB0", daily[si].temp_min, daily[si].temp_max);
+            lv_table_set_cell_value(daily_table, r, 2, buf);
+            snprintf(buf, sizeof(buf), "%d%%", daily[si].humidity);
+            lv_table_set_cell_value(daily_table, r, 3, buf);
+            snprintf(buf, sizeof(buf), "%.1fm/s", daily[si].wind);
+            lv_table_set_cell_value(daily_table, r, 4, buf);
+            snprintf(buf, sizeof(buf), "%d%%", daily[si].pop_pct);
+            lv_table_set_cell_value(daily_table, r, 5, buf);
+        }
+    }
+}
+
 static void build_forecast_ui()
 {
     if (forecast_ui_built) return;
@@ -177,61 +240,37 @@ static void build_forecast_ui()
     forecast_ui_built = true;
     lv_group_t *g = lv_group_get_default();
     int tw = lv_disp_get_hor_res(NULL) - 20;
-    char buf[16];
 
     // --- 24-Hour Forecast ---
     lv_obj_t *h_hdr = lv_menu_cont_create(main_page);
+    lv_obj_set_style_pad_top(h_hdr, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(h_hdr, 2, LV_PART_MAIN);
     lv_obj_t *h_lbl = lv_label_create(h_hdr);
     lv_label_set_text(h_lbl, "24-Hour Forecast");
     lv_obj_set_style_text_color(h_lbl, lv_color_make(100, 200, 255), 0);
     if (g) lv_group_add_obj(g, h_hdr);
 
-    lv_obj_t *ht = lv_table_create(main_page);
-    setup_table(ht, tw);
-    lv_table_set_row_count(ht, hourly_count + 1);
+    hourly_table = lv_table_create(main_page);
+    setup_table(hourly_table, tw);
     const char *hcols[] = {"Time", "Weather", "Temp", "Hum", "Wind", "Rain"};
-    for (int j = 0; j < 6; j++) lv_table_set_cell_value(ht, 0, j, hcols[j]);
-
-    for (int i = 0; i < hourly_count; i++) {
-        int r = i + 1;
-        lv_table_set_cell_value(ht, r, 0, hourly[i].time_str);
-        lv_table_set_cell_value(ht, r, 1, hourly[i].desc);
-        snprintf(buf, sizeof(buf), "%.0f\xC2\xB0" "C", hourly[i].temp);
-        lv_table_set_cell_value(ht, r, 2, buf);
-        snprintf(buf, sizeof(buf), "%d%%", hourly[i].humidity);
-        lv_table_set_cell_value(ht, r, 3, buf);
-        snprintf(buf, sizeof(buf), "%.1fm/s", hourly[i].wind);
-        lv_table_set_cell_value(ht, r, 4, buf);
-        snprintf(buf, sizeof(buf), "%d%%", hourly[i].pop_pct);
-        lv_table_set_cell_value(ht, r, 5, buf);
-    }
+    for (int j = 0; j < 6; j++) lv_table_set_cell_value(hourly_table, 0, j, hcols[j]);
 
     // --- 8-Day Forecast ---
     lv_obj_t *d_hdr = lv_menu_cont_create(main_page);
+    lv_obj_set_style_pad_top(d_hdr, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(d_hdr, 2, LV_PART_MAIN);
     lv_obj_t *d_lbl = lv_label_create(d_hdr);
     lv_label_set_text(d_lbl, "8-Day Forecast");
     lv_obj_set_style_text_color(d_lbl, lv_color_make(100, 200, 255), 0);
     if (g) lv_group_add_obj(g, d_hdr);
 
-    lv_obj_t *dt = lv_table_create(main_page);
-    setup_table(dt, tw);
-    lv_table_set_row_count(dt, daily_count + 1);
+    daily_table = lv_table_create(main_page);
+    setup_table(daily_table, tw);
     const char *dcols[] = {"Day", "Weather", "Lo/Hi", "Hum", "Wind", "Rain"};
-    for (int j = 0; j < 6; j++) lv_table_set_cell_value(dt, 0, j, dcols[j]);
+    for (int j = 0; j < 6; j++) lv_table_set_cell_value(daily_table, 0, j, dcols[j]);
 
-    for (int i = 0; i < daily_count; i++) {
-        int r = i + 1;
-        lv_table_set_cell_value(dt, r, 0, daily[i].day_str);
-        lv_table_set_cell_value(dt, r, 1, daily[i].desc);
-        snprintf(buf, sizeof(buf), "%.0f/%.0f\xC2\xB0", daily[i].temp_min, daily[i].temp_max);
-        lv_table_set_cell_value(dt, r, 2, buf);
-        snprintf(buf, sizeof(buf), "%d%%", daily[i].humidity);
-        lv_table_set_cell_value(dt, r, 3, buf);
-        snprintf(buf, sizeof(buf), "%.1fm/s", daily[i].wind);
-        lv_table_set_cell_value(dt, r, 4, buf);
-        snprintf(buf, sizeof(buf), "%d%%", daily[i].pop_pct);
-        lv_table_set_cell_value(dt, r, 5, buf);
-    }
+    // Populate with current data
+    update_forecast_tables();
 
     printf("[Weather] forecast UI built: %d hourly + %d daily\n",
            hourly_count, daily_count);
@@ -245,10 +284,24 @@ static void update_ui()
 
     if (city_label) lv_label_set_text(city_label, location_name);
 
-    struct tm timeinfo;
-    hw_get_date_time(timeinfo);
-    if (updated_label)
-        lv_label_set_text_fmt(updated_label, "Updated %02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+    const char *day_abbr[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    const char *mon_abbr[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                              "Jul","Aug","Sep","Oct","Nov","Dec"};
+
+    // Use the API's timezone_offset for correct local time at location
+    time_t now_utc = time(NULL);
+    time_t now_local = now_utc + tz_offset;
+    struct tm *local_tm = gmtime(&now_local);
+
+    if (date_label && local_tm) {
+        lv_label_set_text_fmt(date_label, "%s, %s %d",
+                              day_abbr[local_tm->tm_wday],
+                              mon_abbr[local_tm->tm_mon],
+                              local_tm->tm_mday);
+    }
+
+    if (updated_label && local_tm)
+        lv_label_set_text_fmt(updated_label, "Updated %02d:%02d", local_tm->tm_hour, local_tm->tm_min);
 
     if (weather_icon)
         lv_image_set_src(weather_icon, weather_icon_img(cur.icon));
@@ -272,6 +325,7 @@ static void update_ui()
         lv_label_set_text(status_label, "");
 
     build_forecast_ui();
+    update_forecast_tables();
 }
 
 #ifdef ARDUINO
@@ -285,6 +339,11 @@ static void parse_onecall(const char *json)
     }
 
     const char *day_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
+    // Get timezone offset for the location (seconds east of UTC)
+    cJSON *tz = cJSON_GetObjectItem(root, "timezone_offset");
+    if (tz) tz_offset = tz->valueint;
+    printf("[Weather] timezone_offset = %d seconds\n", tz_offset);
 
     cJSON *current = cJSON_GetObjectItem(root, "current");
     if (current) {
@@ -325,10 +384,12 @@ static void parse_onecall(const char *json)
             if (!dt) continue;
 
             time_t ts = (time_t)dt->valueint;
-            struct tm *tm_info = localtime(&ts);
+            time_t local_ts = ts + tz_offset;
+            struct tm *tm_info = gmtime(&local_ts);
             if (!tm_info) continue;
 
             hourly_entry_t *h = &hourly[hourly_count];
+            h->ts = ts;
             snprintf(h->time_str, sizeof(h->time_str), "%02d:%02d",
                      tm_info->tm_hour, tm_info->tm_min);
 
@@ -363,10 +424,12 @@ static void parse_onecall(const char *json)
             if (!dt) continue;
 
             time_t ts = (time_t)dt->valueint;
-            struct tm *tm_info = localtime(&ts);
+            time_t local_ts = ts + tz_offset;
+            struct tm *tm_info = gmtime(&local_ts);
             if (!tm_info) continue;
 
             daily_entry_t *d = &daily[daily_count];
+            d->ts = ts;
             snprintf(d->day_str, sizeof(d->day_str), "%s",
                      day_names[tm_info->tm_wday]);
 
@@ -431,8 +494,9 @@ static void save_cache()
     prefs.putBytes("daily", daily, sizeof(daily_entry_t) * daily_count);
     prefs.putChar("hcnt", hourly_count);
     prefs.putChar("dcnt", daily_count);
-    prefs.putBool("valid", true);
+    prefs.putBool("v2", true);
     prefs.putULong("ftime", millis());
+    prefs.putLong("tz_off", tz_offset);
     prefs.end();
 }
 
@@ -440,7 +504,7 @@ static void load_cache()
 {
     Preferences prefs;
     prefs.begin("weather", true);
-    if (prefs.getBool("valid", false)) {
+    if (prefs.getBool("v2", false)) {
         if (prefs.getBytes("cur", &cur, sizeof(cur)) == sizeof(cur)) {
             String loc = prefs.getString("locname", "");
             strncpy(location_name, loc.c_str(), 63);
@@ -451,6 +515,7 @@ static void load_cache()
             prefs.getBytes("hourly", hourly, sizeof(hourly_entry_t) * hourly_count);
             prefs.getBytes("daily", daily, sizeof(daily_entry_t) * daily_count);
             last_fetch_time = prefs.getULong("ftime", 0);
+            tz_offset = prefs.getLong("tz_off", 0);
             data_valid = true;
         }
     }
@@ -584,12 +649,15 @@ static void back_event_handler(lv_event_t *e)
         main_page = NULL;
         forecast_ui_built = false;
         city_label = NULL;
+        date_label = NULL;
         updated_label = NULL;
         temp_label = NULL;
         detail_label = NULL;
         desc_label = NULL;
         status_label = NULL;
         weather_icon = NULL;
+        hourly_table = NULL;
+        daily_table = NULL;
         if (quit_btn) { lv_obj_del_async(quit_btn); quit_btn = NULL; }
         menu_show();
     }
@@ -623,9 +691,23 @@ void ui_weather_enter(lv_obj_t *parent)
     lv_obj_set_style_pad_all(top_row, 0, LV_PART_MAIN);
     lv_obj_remove_flag(top_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    city_label = lv_label_create(top_row);
+    // Left side: city + date
+    lv_obj_t *left_col = lv_obj_create(top_row);
+    lv_obj_set_size(left_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(left_col, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(left_col, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(left_col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(left_col, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(left_col, LV_FLEX_FLOW_ROW);
+    lv_obj_remove_flag(left_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(left_col, LV_ALIGN_LEFT_MID, 0, 0);
+
+    city_label = lv_label_create(left_col);
     lv_label_set_text(city_label, "Loading...");
-    lv_obj_align(city_label, LV_ALIGN_LEFT_MID, 0, 0);
+
+    date_label = lv_label_create(left_col);
+    lv_obj_set_style_text_color(date_label, lv_color_make(180, 180, 180), LV_PART_MAIN);
+    lv_label_set_text(date_label, "");
 
     updated_label = lv_label_create(top_row);
     lv_label_set_text(updated_label, "");
