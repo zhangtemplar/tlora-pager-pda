@@ -2206,31 +2206,81 @@ void hw_set_keyboard_read_callback(void(*read)(int state, char &c))
 #ifdef ARDUINO
 static void(*back_button_cb)() = NULL;
 
+static void launch_power_app()
+{
+    extern lv_obj_t *main_screen;
+    extern lv_group_t *app_g;
+    extern void menu_hidden();
+    extern void set_default_group(lv_group_t *group);
+    extern void ui_power_enter(lv_obj_t *parent);
+
+    if (!main_screen) return;
+
+    // If an app is currently open, close it first by clicking its back button
+    lv_obj_t *app_tile = lv_obj_get_child(main_screen, 1);
+    if (app_tile) {
+        uint32_t cnt = lv_obj_get_child_count(app_tile);
+        for (uint32_t i = 0; i < cnt; i++) {
+            lv_obj_t *child = lv_obj_get_child(app_tile, i);
+            if (lv_obj_check_type(child, &lv_menu_class)) {
+                lv_obj_t *back_btn = lv_menu_get_main_header_back_button(child);
+                if (back_btn) {
+                    lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+                }
+                break;
+            }
+        }
+    }
+
+    // Launch the power app on the app tile
+    lv_obj_t *parent = lv_obj_get_child(main_screen, 1);
+    if (parent) {
+        set_default_group(app_g);
+        ui_power_enter(parent);
+        menu_hidden();
+    }
+}
+
+// Boot button: short press = back/home, long press (>1s) = power app
 static void back_btn_timer_cb(lv_timer_t *t)
 {
     static bool last_state = true;
+    static uint32_t press_start = 0;
+    static bool long_press_fired = false;
+
     bool current = digitalRead(0);
 
     if (last_state && !current) {
-        // Falling edge = button pressed
-        if (back_button_cb) {
-            back_button_cb();
-        } else {
-            // Default: find the active menu on app tile and click its back button
-            // main_screen is a tileview; tile[1] is the app area
-            extern lv_obj_t *main_screen;
-            if (main_screen) {
-                lv_obj_t *app_tile = lv_obj_get_child(main_screen, 1);
-                if (app_tile) {
-                    uint32_t cnt = lv_obj_get_child_count(app_tile);
-                    for (uint32_t i = 0; i < cnt; i++) {
-                        lv_obj_t *child = lv_obj_get_child(app_tile, i);
-                        if (lv_obj_check_type(child, &lv_menu_class)) {
-                            lv_obj_t *back_btn = lv_menu_get_main_header_back_button(child);
-                            if (back_btn) {
-                                lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+        // Falling edge = button just pressed
+        press_start = millis();
+        long_press_fired = false;
+    } else if (!last_state && !current) {
+        // Button still held — check for long press
+        if (!long_press_fired && (millis() - press_start) > 1000) {
+            long_press_fired = true;
+            launch_power_app();
+        }
+    } else if (!last_state && current) {
+        // Rising edge = button released
+        if (!long_press_fired) {
+            // Short press — back/home
+            if (back_button_cb) {
+                back_button_cb();
+            } else {
+                extern lv_obj_t *main_screen;
+                if (main_screen) {
+                    lv_obj_t *app_tile = lv_obj_get_child(main_screen, 1);
+                    if (app_tile) {
+                        uint32_t cnt = lv_obj_get_child_count(app_tile);
+                        for (uint32_t i = 0; i < cnt; i++) {
+                            lv_obj_t *child = lv_obj_get_child(app_tile, i);
+                            if (lv_obj_check_type(child, &lv_menu_class)) {
+                                lv_obj_t *back_btn = lv_menu_get_main_header_back_button(child);
+                                if (back_btn) {
+                                    lv_obj_send_event(back_btn, LV_EVENT_CLICKED, NULL);
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                 }
