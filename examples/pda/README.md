@@ -1,6 +1,6 @@
 # PDA — New Features & Setup Guide
 
-This document covers the new apps and enhancements added to the LilyGo PDA firmware.
+This is completely built by CLAUDE with 75k output tokens and estimated cost is $10. This document covers the new apps and enhancements added to the LilyGo PDA firmware.
 
 ## Setup
 
@@ -134,6 +134,19 @@ Monthly calendar view with navigation.
 |----------|--------|
 | **Space+W/S** | Previous/next month |
 | **Space+P/N** | Previous/next year |
+
+## Development Stats
+
+All new features in this document were developed with Claude Code (Claude Opus 4) across two sessions.
+
+| Metric | Value |
+|--------|-------|
+| User interactions | ~27 |
+| Tool calls (read/edit/grep/bash) | ~180 |
+| Sub-agent calls | ~7 |
+| Estimated input tokens | ~330K |
+| Estimated output tokens | ~75K |
+| Estimated cost | ~$10 |
 
 ## Architecture Notes
 
