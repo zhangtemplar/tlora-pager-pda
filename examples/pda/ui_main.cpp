@@ -743,12 +743,13 @@ void setupGui()
     create_app(panel, "Bluetooth", &img_bluetooth, &ui_ble_main);
 #endif
 
-#if defined(USING_INPUT_DEV_KEYBOARD)
-    if (hw_has_keyboard()) {
-        create_app(panel, "BLE Keyboard", &img_bluetooth, &ui_ble_kb_main);
-        create_app(panel, "Keyboard", &img_keyboard, &ui_keyboard_main);
-    }
-#endif
+    // BLE Keyboard and Keyboard apps hidden — rarely used on T-Deck
+    // #if defined(USING_INPUT_DEV_KEYBOARD)
+    //     if (hw_has_keyboard()) {
+    //         create_app(panel, "BLE Keyboard", &img_bluetooth, &ui_ble_kb_main);
+    //         create_app(panel, "Keyboard", &img_keyboard, &ui_keyboard_main);
+    //     }
+    // #endif
 
     create_app(panel, "Music", &img_music, &ui_audio_main);
     create_app(panel, "LoRa", &img_radio, &ui_radio_main);
